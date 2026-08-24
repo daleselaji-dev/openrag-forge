@@ -45,7 +45,23 @@ NODE_CATALOG: dict[str, dict[str, Any]] = {
 
 
 def node_catalog() -> dict[str, dict[str, Any]]:
-    return NODE_CATALOG.copy()
+    config_hints = {
+        "parse_route": {"route": "auto"},
+        "chunker": {"max_chars": 1200, "overlap": 120},
+        "embed_index": {"model_ref": "configured-embedding", "collection": "openrag_forge"},
+        "dense_retrieve": {"model_ref": "configured-embedding", "top_k": 5, "score_threshold": 0.0},
+        "sparse_retrieve": {"backend": "qdrant_named_sparse", "top_k": 20},
+        "rrf_fusion": {"k": 60, "weights": [1.0, 1.0]},
+        "reranker": {"model_ref": "configured-reranker", "candidate_k": 50, "final_k": 6},
+        "context_builder": {"token_budget": 4000, "official_minimum": 1, "mmr_lambda": 0.7},
+        "llm_generate": {"model_ref": "configured-chat", "temperature": 0.1, "max_tokens": 600},
+        "bounded_corrective": {"max_retries": 1, "query_variant": "domain_term_expansion"},
+        "metadata_filter": {"fields": {}, "on_empty": "fallback_once"},
+        "rate_limit": {"requests_per_minute": 60},
+        "cache": {"ttl_seconds": 300, "key": "question+recipe_hash"},
+        "approval": {"required": True},
+    }
+    return {node_type: {**spec, "description": f"{node_type} component", "config_defaults": config_hints.get(node_type, {})} for node_type, spec in NODE_CATALOG.items()}
 
 
 def _canonical(recipe: Recipe) -> bytes:
