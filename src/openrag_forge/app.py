@@ -70,6 +70,13 @@ class ModelRegistration(BaseModel):
     source: Literal["endpoint", "manifest"] = "endpoint"
 
 
+SCENARIOS = [
+    {"scenario_id": "customer_support", "title": "客服投诉助手", "business_problem": "一线客服需要在回答前快速核对官方流程与相似案例。", "recipe_id": "v0_2_hybrid", "sample_question": "客户说信用卡上有一笔不认识的扣款，客服应该先核对哪些信息？", "data_requirements": ["官方 FAQ / SOP", "产品政策", "脱敏历史工单"], "trace_expectation": ["Dense/Sparse candidates", "RRF", "evidence", "citation", "policy gate"], "source_urls": ["https://www.consumerfinance.gov/data-research/consumer-complaints/"]},
+    {"scenario_id": "internal_policy", "title": "企业内部政策问答", "business_problem": "员工需要查询版本化的 HR、IT 或合规 SOP，并且不能混用过期政策。", "recipe_id": "v0_4_rerank", "sample_question": "这份内部政策要求审批人核对哪些材料？", "data_requirements": ["版本化政策 PDF/DOCX", "审批 SOP", "生效日期 Metadata"], "trace_expectation": ["metadata filter", "hybrid candidates", "rerank", "citation"], "source_urls": []},
+    {"scenario_id": "controlled_customer_agent", "title": "受控客服 Agent", "business_problem": "客服工单字段不完整时先追问并生成草稿，不能自动发消息或决定退款。", "recipe_id": "v1_controlled_agent", "sample_question": "我发现信用卡上有一笔陌生扣款，之前联系过银行但还没有明确结果。", "data_requirements": ["客服知识库", "工单字段定义", "人工审批规则"], "trace_expectation": ["missing fields", "search", "ticket draft", "human approval"], "source_urls": []},
+]
+
+
 def _safe_filename(filename: str | None) -> str:
     value = Path(filename or "upload.bin").name
     value = re.sub(r"[^A-Za-z0-9._()\-\u4e00-\u9fff ]", "_", value).strip(" .")
@@ -206,7 +213,7 @@ async def list_documents(knowledge_base_id: str):
 
 
 @app.post("/api/v1/knowledge-bases/{knowledge_base_id}/documents")
-async def upload_document(knowledge_base_id: str, file: UploadFile = File(...), route: str | None = None):
+async def upload_document(knowledge_base_id: str, file: UploadFile = File(...), route: str | None = None, embedding_model_id: str | None = None):
     filename = _safe_filename(file.filename)
     content = await file.read()
     max_bytes = settings.max_upload_mb * 1024 * 1024
@@ -226,7 +233,15 @@ async def upload_document(knowledge_base_id: str, file: UploadFile = File(...), 
         app.state.store.save_blocks(blocks)
         app.state.store.save_chunks(chunks)
         try:
-            index = app.state.qdrant.index(chunks)
+            indexer = app.state.qdrant
+            if embedding_model_id:
+                model = app.state.store.get_model(embedding_model_id)
+                if model is None or model.get("kind") != "embedding":
+                    raise HTTPException(status_code=422, detail="指定的 embedding_model_id 未注册或不是 Embedding 模型")
+                model_settings = settings.model_copy(update={"embedding_base_url": model["base_url"], "embedding_model": model["model_name"]})
+                indexer = QdrantAdapter(model_settings)
+            index = indexer.index(chunks)
+            index["embedding_model_id"] = embedding_model_id or "configured-embedding"
         except Exception as index_error:
             index = {"status": "deferred", "reason": str(index_error), "next_action": "启动 Embedding 与 Qdrant 后重建索引"}
         return {"job_id": document_id, "document": document, "route": decision, "blocks": len(blocks), "chunks": len(chunks), "index": index}
@@ -292,6 +307,11 @@ async def rebuild_index(knowledge_base_id: str):
 @app.get("/api/v1/plugins")
 async def plugins():
     return {"nodes": node_catalog(), "parsers": ["native_text", "html_structure", "pdf_page_text", "pdf_layout", "office_structure", "tabular", "json_structure"]}
+
+
+@app.get("/api/v1/scenarios")
+async def scenarios():
+    return {"items": SCENARIOS, "note": "Scenario 运行使用当前选中的知识库；示例中的业务资料必须先导入或连接官方 Pack。"}
 
 
 @app.get("/api/v1/models")
@@ -380,6 +400,7 @@ async def _execute(request: RunRequest) -> RunResult:
     run_id = f"run_{uuid4().hex[:16]}"
     recorder = TraceRecorder(run_id, recipe.hash or "", app.state.store)
     evidence: list[Evidence] = []
+    artifact: dict[str, Any] | None = None
     chunks = app.state.store.list_chunks(request.knowledge_base_id)
     answer: str | None = None
     if request.mode == "preview":
@@ -397,7 +418,7 @@ async def _execute(request: RunRequest) -> RunResult:
                 else:
                     recorder.record(node_id, "skipped", "request_safety_gate 已提前停止该节点", {"risk_codes": risk_codes})
             answer = "我不能替你认定违法、承诺退款或做账户决定。可以改为：根据知识库中的官方流程，列出需要核对的事实和下一步人工处理项。"
-            result = RunResult(run_id=run_id, recipe_id=recipe.recipe_id, recipe_hash=recipe.hash or "", status="completed", answer=answer, evidence=[], trace=recorder.events, safety={"side_effects": False, "request_safety_gate": risk_codes, "human_review": True})
+            result = RunResult(run_id=run_id, recipe_id=recipe.recipe_id, recipe_hash=recipe.hash or "", status="completed", answer=answer, artifact=None, evidence=[], trace=recorder.events, safety={"side_effects": False, "request_safety_gate": risk_codes, "human_review": True})
             payload = result.model_dump(mode="json")
             app.state.store.save_run(payload)
             capsule_path = settings.artifact_dir / f"{run_id}.json"
@@ -434,9 +455,16 @@ async def _execute(request: RunRequest) -> RunResult:
                 recorder.record(node_id, "completed", "安全策略通过；未发现外部副作用动作", {"human_review": not bool(evidence)})
             elif node.type == "approval":
                 recorder.record(node_id, "completed", "停在人工审批门", {"approval_required": True})
+            elif node.type == "build_ticket_draft":
+                normalized = request.question.lower()
+                supplied = {"merchant": bool(re.search(r"merchant|商户", normalized)), "date": bool(re.search(r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b|日期|date", normalized)), "previous_actions": bool(re.search(r"contacted|联系过|此前|previous", normalized))}
+                missing = [field for field, present in supplied.items() if not present]
+                artifact = {"artifact_type": "ticket_draft", "status": "pending_human_approval", "fields": {"message": request.question, "merchant": None, "date": None, "previous_actions": None}, "missing_fields": missing, "evidence_ids": [item.citation for item in evidence], "forbidden_actions": ["send_customer_message", "write_external_crm", "promise_refund", "decide_legal_liability"]}
+                answer = f"已生成客服工单草稿，仍缺少字段：{', '.join(missing) if missing else '无'}。草稿必须经过人工审批。"
+                recorder.record(node_id, "completed", "生成结构化工单草稿，未执行外部动作", {"missing_fields": missing, "approval_required": True})
             else:
                 recorder.record(node_id, "completed", f"{node.type} 已执行", {"node_type": node.type})
-        result = RunResult(run_id=run_id, recipe_id=recipe.recipe_id, recipe_hash=recipe.hash or "", status="completed", answer=answer, evidence=evidence, trace=recorder.events, safety={"side_effects": False, "human_review": not bool(evidence)})
+        result = RunResult(run_id=run_id, recipe_id=recipe.recipe_id, recipe_hash=recipe.hash or "", status="completed", answer=answer, artifact=artifact, evidence=evidence, trace=recorder.events, safety={"side_effects": False, "human_review": not bool(evidence) or bool(artifact)})
     payload = result.model_dump(mode="json")
     app.state.store.save_run(payload)
     capsule_path = settings.artifact_dir / f"{run_id}.json"

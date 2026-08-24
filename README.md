@@ -35,6 +35,8 @@ The first public framework baseline includes:
 - typed Recipe compilation for Dense, Hybrid, Operations and Controlled Agent examples;
 - Preview, real run, Trace and downloadable Evidence Capsule APIs;
 - React + React Flow workbench with request-abort protection when switching Recipes quickly.
+- Scenario Gallery presets for customer support, internal policy and controlled customer Agent demonstrations;
+- `custom_ingest` Recipe for selecting an Embedding model before uploading user documents.
 
 ## What makes it different
 

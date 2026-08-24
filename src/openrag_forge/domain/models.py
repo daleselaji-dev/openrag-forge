@@ -98,7 +98,7 @@ class RunResult(BaseModel):
     recipe_hash: str
     status: Literal["running", "completed", "failed"]
     answer: str | None = None
+    artifact: dict[str, Any] | None = None
     evidence: list[Evidence] = Field(default_factory=list)
     safety: dict[str, Any] = Field(default_factory=dict)
     trace: list[TraceEvent] = Field(default_factory=list)
-
