@@ -50,5 +50,6 @@ The first public framework baseline includes:
 The current branch is the framework extraction baseline. The CFPB consumer-support implementation lives in `packs/customer-support-cfpb` and is intentionally separate from the generic core.
 
 See `docs/architecture.md` and `docs/recipes.md` for the public contracts.
+See `docs/production-playbook.md` for production-grade deployment, trace and tuning guidance.
 See `docs/benchmark-smoke-v0.1.md` for the reproducible local benchmark and its limitations.
 See `docs/golden-eval-v0.1-dev.md` for labeled retrieval, citation and safety evaluation.

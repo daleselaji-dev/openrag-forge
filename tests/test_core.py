@@ -33,7 +33,10 @@ def test_recipe_compiler_rejects_cycle():
 def test_api_upload_preview_and_capsule(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "data_dir", tmp_path)
     with TestClient(app) as client:
-        assert client.get("/api/v1/health").status_code == 200
+        health = client.get("/api/v1/health")
+        assert health.status_code == 200
+        assert health.headers["x-request-id"].startswith("req_")
+        assert health.headers["x-openrag-env"]
         upload = client.post("/api/v1/knowledge-bases/default/documents", files={"file": ("faq.md", b"A support answer.", "text/markdown")})
         assert upload.status_code == 200
         run = client.post("/api/v1/runs", json={"knowledge_base_id": "default", "recipe_id": "v1_controlled_agent", "question": "What is the support answer?", "mode": "preview"})
@@ -48,3 +51,11 @@ def test_api_upload_preview_and_capsule(tmp_path, monkeypatch):
         evaluation = client.post("/api/v1/evals", json={"knowledge_base_id": "default", "recipe_id": "v0_1_dense", "cases": [{"case_id": "answer", "question": "What is the support answer?", "must_answer": True, "expected_terms": ["support"]}, {"case_id": "risk", "question": "Can you guarantee a refund?", "must_answer": False}]})
         assert evaluation.status_code == 200
         assert evaluation.json()["refusal_correctness"] == 1.0
+        runtime = client.get("/api/v1/ops/runtime")
+        assert runtime.status_code == 200
+        runtime_payload = runtime.json()
+        assert "ingest.chunker" in runtime_payload["components"]
+        assert runtime_payload["deployment"]["env_example"] == ".env.example"
+        ops_runs = client.get("/api/v1/ops/runs")
+        assert ops_runs.status_code == 200
+        assert ops_runs.json()["count"] >= 1
