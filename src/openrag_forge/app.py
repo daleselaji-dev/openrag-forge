@@ -222,16 +222,21 @@ async def upload_document(knowledge_base_id: str, file: UploadFile = File(...), 
     if not content:
         raise HTTPException(status_code=400, detail="不能上传空文件")
     document_id = f"doc_{uuid4().hex[:16]}"
+    ingest_recipe = app.state.store.get_recipe("custom_ingest")
+    ingest_trace = TraceRecorder(f"ingest_{uuid4().hex[:12]}", ingest_recipe.hash if ingest_recipe else "", app.state.store)
     media_type = file.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
     document = Document(document_id=document_id, knowledge_base_id=knowledge_base_id, filename=filename, media_type=media_type, size_bytes=len(content), sha256=hashlib.sha256(content).hexdigest())
     app.state.store.save_document(document, content)
     try:
         decision, blocks = parse_bytes(document_id, filename, media_type, content, route)
+        ingest_trace.record("route", "completed", f"选择解析路由：{decision.route}", {"confidence": decision["confidence"], "reason_codes": decision["reason_codes"]})
         chunks = chunk_blocks(blocks)
+        ingest_trace.record("chunk", "completed", f"生成 {len(chunks)} 个 Chunk", {"blocks": len(blocks), "chunks": len(chunks)})
         document = document.model_copy(update={"status": "parsed", "parser_route": decision.route, "parser_confidence": decision["confidence"], "reason_codes": decision["reason_codes"]})
         app.state.store.update_document(document)
         app.state.store.save_blocks(blocks)
         app.state.store.save_chunks(chunks)
+        ingest_trace.record("meta", "completed", "保存文档版本与 Chunk Metadata", {"document_id": document_id, "version": document.version})
         try:
             indexer = app.state.qdrant
             if embedding_model_id:
@@ -242,10 +247,13 @@ async def upload_document(knowledge_base_id: str, file: UploadFile = File(...), 
                 indexer = QdrantAdapter(model_settings)
             index = indexer.index(chunks)
             index["embedding_model_id"] = embedding_model_id or "configured-embedding"
+            ingest_trace.record("index", "completed", f"Embedding 与 Qdrant 索引完成：{len(chunks)} 条", index)
         except Exception as index_error:
             index = {"status": "deferred", "reason": str(index_error), "next_action": "启动 Embedding 与 Qdrant 后重建索引"}
-        return {"job_id": document_id, "document": document, "route": decision, "blocks": len(blocks), "chunks": len(chunks), "index": index}
+            ingest_trace.record("index", "failed", "索引暂缓，原始文档与 Chunk 已保留", index)
+        return {"job_id": document_id, "document": document, "route": decision, "blocks": len(blocks), "chunks": len(chunks), "index": index, "trace_id": ingest_trace.run_id, "trace": [event.model_dump() for event in ingest_trace.events]}
     except Exception as exc:
+        ingest_trace.record("route", "failed", "解析失败，原始文件已保留", {"error": str(exc)})
         document = document.model_copy(update={"status": "failed", "reason_codes": ["parser_failed", type(exc).__name__]})
         app.state.store.update_document(document)
         raise HTTPException(status_code=422, detail={"message": "解析失败，原始文件已保留", "document": document.model_dump(), "error": str(exc)}) from exc
