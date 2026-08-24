@@ -60,6 +60,15 @@ OPENRAG_OTEL_ENABLED=true docker compose --profile observability up -d
 | `docs/deployment.md` | 本地 → Compose → Kubernetes 三档部署 |
 | `docs/production-checklist.md` | 上线逐项清单（映射到仓库内落地位置） |
 
+## Workbench（Control Room 工作台）
+
+`web/` 是全高 Control Room 工作台：左轨切换 装配 / 数据 / 模型 / 场景，中间是 React Flow 画布，右侧节点检查器提供结构化配置表单（字段带 生效 / 不生效 标注，JSON 仅作高级模式），底部 Trace 面板包含 运行 Trace（真实 duration_ms + execution 标注，点击行高亮画布节点）、Ingest Trace 与 回答与证据（安全决策 + Evidence Capsule 下载）。
+
+- 顶栏「辅助教学」开关（localStorage 持久化）：打开后显示分步课程条、节点教学卡与场景 Trace 观察清单；关闭后是干净的生产工作台。
+- 诚实标注：目录中尚未实现的节点（稀疏检索 / RRF / 重排等）在画布、检查器与 Trace 里都会标注「占位 / 退化」，Trace 的 `execution` 字段记录每一步真实发生了什么（live / fallback / stub_passthrough）。
+
+开发：`cd web && npm run dev`（Vite :5173，`/api` 代理到 :18000）；`npm run build` 后 FastAPI 直接伺服 `web/dist`。
+
 ## What makes it different
 
 - **Recipe Compiler**: a drag-and-drop graph is compiled into a typed, immutable, hash-addressed Recipe before it can run.

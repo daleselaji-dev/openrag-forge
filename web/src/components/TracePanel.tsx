@@ -38,7 +38,7 @@ function TraceRows({ events, catalog, recipe, selectedNodeId, onSelectNode, clic
           <div
             key={`${event.node_id}-${event.sequence}`}
             className={`trace-row ${event.status}${selected ? ' selected' : ''}${clickable ? ' clickable' : ''}`}
-            onClick={() => clickable && onSelectNode(selectedNodeId === event.node_id ? null : event.node_id)}
+            onClick={() => clickable && onSelectNode(event.node_id)}
           >
             <span className="trace-seq">{String(event.sequence).padStart(2, '0')}</span>
             <div className="trace-node">
