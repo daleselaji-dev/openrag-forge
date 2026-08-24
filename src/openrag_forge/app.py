@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import mimetypes
 import re
 import time
@@ -11,7 +12,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 import httpx
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -37,7 +38,7 @@ class QueryRequest(BaseModel):
     knowledge_base_id: str = "default"
     recipe_id: str = "v0_1_dense"
     question: str = Field(min_length=3, max_length=6000)
-    top_k: int = Field(default=5, ge=1, le=20)
+    top_k: int = Field(default=settings.default_top_k, ge=1, le=20)
 
 
 class RunRequest(QueryRequest):
@@ -143,6 +144,52 @@ def _request_is_high_risk(question: str) -> list[str]:
     return detect_request_risks(question)
 
 
+def _cors_origins() -> list[str]:
+    raw = settings.cors_allow_origins.strip()
+    if raw == "*":
+        return ["*"]
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _component_runtime() -> dict[str, Any]:
+    return {
+        "ingest.router": {"config": {"max_upload_mb": settings.max_upload_mb}, "env": ["OPENRAG_MAX_UPLOAD_MB"]},
+        "ingest.chunker": {
+            "config": {"chunk_max_chars": settings.chunk_max_chars, "chunk_overlap": settings.chunk_overlap},
+            "env": ["OPENRAG_CHUNK_MAX_CHARS", "OPENRAG_CHUNK_OVERLAP"],
+        },
+        "index.qdrant": {
+            "config": {"url": settings.qdrant_url, "collection": settings.qdrant_collection},
+            "env": ["OPENRAG_QDRANT_URL", "OPENRAG_QDRANT_COLLECTION"],
+        },
+        "retrieve": {
+            "config": {"top_k_default": settings.default_top_k, "score_threshold": settings.retrieval_score_threshold},
+            "env": ["OPENRAG_DEFAULT_TOP_K", "OPENRAG_RETRIEVAL_SCORE_THRESHOLD"],
+        },
+        "generate.chat": {
+            "config": {"base_url": settings.chat_base_url, "model": settings.chat_model},
+            "env": ["OPENRAG_CHAT_BASE_URL", "OPENRAG_CHAT_MODEL"],
+        },
+        "generate.embedding": {
+            "config": {"base_url": settings.embedding_base_url, "model": settings.embedding_model},
+            "env": ["OPENRAG_EMBEDDING_BASE_URL", "OPENRAG_EMBEDDING_MODEL"],
+        },
+        "trace": {
+            "config": {"trace_persistence": settings.trace_persistence, "trace_sample_rate": settings.trace_sample_rate},
+            "env": ["OPENRAG_TRACE_PERSISTENCE", "OPENRAG_TRACE_SAMPLE_RATE"],
+        },
+        "api": {
+            "config": {
+                "service_name": settings.service_name,
+                "service_env": settings.service_env,
+                "log_level": settings.log_level,
+                "cors_allow_origins": _cors_origins(),
+            },
+            "env": ["OPENRAG_SERVICE_NAME", "OPENRAG_SERVICE_ENV", "OPENRAG_LOG_LEVEL", "OPENRAG_CORS_ALLOW_ORIGINS"],
+        },
+    }
+
+
 def _health(store: Store) -> dict[str, Any]:
     documents = sum(len(store.list_documents(kb["knowledge_base_id"])) for kb in store.list_knowledge_bases())
     qdrant: dict[str, Any] = {"url": settings.qdrant_url, "status": "unreachable"}
@@ -174,6 +221,10 @@ def _health(store: Store) -> dict[str, Any]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s service=%(name)s %(message)s",
+    )
     store = Store(settings)
     for recipe in default_recipes():
         if store.get_recipe(recipe.recipe_id) is None:
@@ -196,10 +247,31 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="OpenRAG Forge", version="0.1.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=_cors_origins(), allow_methods=["*"], allow_headers=["*"])
+logger = logging.getLogger(settings.service_name)
 WEB_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
 if WEB_DIST.exists():
     app.mount("/assets", StaticFiles(directory=WEB_DIST / "assets"), name="assets")
+
+
+@app.middleware("http")
+async def request_trace_middleware(request: Request, call_next):
+    request_id = request.headers.get("x-request-id") or f"req_{uuid4().hex[:16]}"
+    started = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = round((time.perf_counter() - started) * 1000, 2)
+    response.headers["x-request-id"] = request_id
+    response.headers["x-openrag-env"] = settings.service_env
+    if settings.enable_request_log:
+        logger.info(
+            "request_id=%s method=%s path=%s status=%s duration_ms=%.2f",
+            request_id,
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms,
+        )
+    return response
 
 
 @app.get("/api/v1/health")
@@ -210,6 +282,26 @@ async def health():
 @app.get("/api/v1/capabilities")
 async def capabilities():
     return {"profile": settings.profile, "nodes": node_catalog(), "parsers": _health(app.state.store)["capabilities"]["parsers"], "model_protocol": "openai-compatible"}
+
+
+@app.get("/api/v1/ops/runtime")
+async def ops_runtime():
+    return {
+        "service": {"name": settings.service_name, "env": settings.service_env, "profile": settings.profile},
+        "components": _component_runtime(),
+        "deployment": {
+            "configure_by": ".env with OPENRAG_* variables",
+            "compose_file": "docker-compose.yml",
+            "env_example": ".env.example",
+        },
+    }
+
+
+@app.get("/api/v1/ops/runs")
+async def ops_runs(limit: int = 20):
+    bounded = min(max(limit, 1), 100)
+    items = app.state.store.list_runs(limit=bounded)
+    return {"items": items, "count": len(items)}
 
 
 @app.post("/api/v1/knowledge-bases")
@@ -247,7 +339,7 @@ async def upload_document(knowledge_base_id: str, file: UploadFile = File(...), 
     try:
         decision, blocks = parse_bytes(document_id, filename, media_type, content, route)
         ingest_trace.record("route", "completed", f"选择解析路由：{decision.route}", {"confidence": decision["confidence"], "reason_codes": decision["reason_codes"]})
-        chunks = chunk_blocks(blocks)
+        chunks = chunk_blocks(blocks, max_chars=settings.chunk_max_chars, overlap=settings.chunk_overlap)
         ingest_trace.record("chunk", "completed", f"生成 {len(chunks)} 个 Chunk", {"blocks": len(blocks), "chunks": len(chunks)})
         document = document.model_copy(update={"status": "parsed", "parser_route": decision.route, "parser_confidence": decision["confidence"], "reason_codes": decision["reason_codes"]})
         app.state.store.update_document(document)
@@ -305,7 +397,7 @@ async def reprocess_document(document_id: str, route: str | None = None):
     path = settings.upload_dir / f"{document.document_id}_{document.filename}"
     try:
         decision, blocks = parse_bytes(document_id, document.filename, document.media_type, path.read_bytes(), route)
-        chunks = chunk_blocks(blocks)
+        chunks = chunk_blocks(blocks, max_chars=settings.chunk_max_chars, overlap=settings.chunk_overlap)
         updated = document.model_copy(update={"status": "parsed", "version": document.version + 1, "parser_route": decision.route, "parser_confidence": decision["confidence"], "reason_codes": decision["reason_codes"]})
         app.state.store.update_document(updated)
         app.state.store.save_blocks(blocks)
