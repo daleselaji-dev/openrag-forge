@@ -160,6 +160,20 @@ def _node(recipe: Recipe, node_id: str):
     return next(node for node in recipe.nodes if node.id == node_id)
 
 
+def _ingest_chunk_config(ingest_recipe: Recipe | None) -> tuple[int, int]:
+    """读取 custom_ingest Recipe 中 chunker 节点的配置，使工作台的调参真实生效。"""
+    max_chars, overlap = 1200, 120
+    if ingest_recipe is not None:
+        for node in ingest_recipe.nodes:
+            if node.type == "chunker":
+                try:
+                    max_chars = min(8000, max(200, int(node.config.get("max_chars", max_chars))))
+                    overlap = min(max_chars // 2, max(0, int(node.config.get("overlap", overlap))))
+                except (TypeError, ValueError):
+                    pass
+    return max_chars, overlap
+
+
 def _extractive_answer(question: str, evidence: list[Evidence]) -> str:
     if not evidence:
         return "当前知识库没有足够证据支持回答。请补充文档或改写问题。"
@@ -368,16 +382,21 @@ def upload_document(knowledge_base_id: str, file: UploadFile = File(...), route:
     media_type = file.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
     document = Document(document_id=document_id, knowledge_base_id=knowledge_base_id, filename=filename, media_type=media_type, size_bytes=len(content), sha256=hashlib.sha256(content).hexdigest())
     app.state.store.save_document(document, content)
+    max_chars, overlap = _ingest_chunk_config(ingest_recipe)
     try:
+        step_started = time.perf_counter()
         decision, blocks = parse_bytes(document_id, filename, media_type, content, route)
-        ingest_trace.record("route", "completed", f"选择解析路由：{decision.route}", {"confidence": decision["confidence"], "reason_codes": decision["reason_codes"]})
-        chunks = chunk_blocks(blocks)
-        ingest_trace.record("chunk", "completed", f"生成 {len(chunks)} 个 Chunk", {"blocks": len(blocks), "chunks": len(chunks)})
+        ingest_trace.record("route", "completed", f"选择解析路由：{decision.route}", {"confidence": decision["confidence"], "reason_codes": decision["reason_codes"], "execution": "live", "node_type": "parse_route"}, started=step_started)
+        step_started = time.perf_counter()
+        chunks = chunk_blocks(blocks, max_chars, overlap)
+        ingest_trace.record("chunk", "completed", f"生成 {len(chunks)} 个 Chunk（max_chars={max_chars}, overlap={overlap}）", {"blocks": len(blocks), "chunks": len(chunks), "max_chars": max_chars, "overlap": overlap, "execution": "live", "node_type": "chunker"}, started=step_started)
+        step_started = time.perf_counter()
         document = document.model_copy(update={"status": "parsed", "parser_route": decision.route, "parser_confidence": decision["confidence"], "reason_codes": decision["reason_codes"]})
         app.state.store.update_document(document)
         app.state.store.save_blocks(blocks)
         app.state.store.save_chunks(chunks)
-        ingest_trace.record("meta", "completed", "保存文档版本与 Chunk Metadata", {"document_id": document_id, "version": document.version})
+        ingest_trace.record("meta", "completed", "保存文档版本与 Chunk Metadata", {"document_id": document_id, "version": document.version, "execution": "live", "node_type": "metadata_enricher"}, started=step_started)
+        step_started = time.perf_counter()
         try:
             indexer = app.state.qdrant
             if embedding_model_id:
@@ -388,13 +407,13 @@ def upload_document(knowledge_base_id: str, file: UploadFile = File(...), route:
                 indexer = QdrantAdapter(model_settings)
             index = indexer.index(chunks)
             index["embedding_model_id"] = embedding_model_id or "configured-embedding"
-            ingest_trace.record("index", "completed", f"Embedding 与 Qdrant 索引完成：{len(chunks)} 条", index)
+            ingest_trace.record("index", "completed", f"Embedding 与 Qdrant 索引完成：{len(chunks)} 条", {**index, "execution": "live", "node_type": "embed_index"}, started=step_started)
         except Exception as index_error:
             # 降级而不失败：真相源已保存，索引可以事后重建。
             # 但降级必须可见——记录指标供告警（详见 observability.metrics）。
             observe_fallback("qdrant_index")
             index = {"status": "deferred", "reason": str(index_error), "next_action": "启动 Embedding 与 Qdrant 后重建索引"}
-            ingest_trace.record("index", "failed", "索引暂缓，原始文档与 Chunk 已保留", index)
+            ingest_trace.record("index", "failed", "索引暂缓，原始文档与 Chunk 已保留", {**index, "execution": "fallback_deferred", "node_type": "embed_index"}, started=step_started)
         return {"job_id": document_id, "document": document, "route": decision, "blocks": len(blocks), "chunks": len(chunks), "index": index, "trace_id": ingest_trace.run_id, "trace": [event.model_dump() for event in ingest_trace.events]}
     except Exception as exc:
         ingest_trace.record("route", "failed", "解析失败，原始文件已保留", {"error": str(exc)})
@@ -430,9 +449,10 @@ def reprocess_document(document_id: str, route: str | None = None):
     if document is None:
         raise HTTPException(status_code=404, detail="文档不存在")
     path = settings.upload_dir / f"{document.document_id}_{document.filename}"
+    max_chars, overlap = _ingest_chunk_config(app.state.store.get_recipe("custom_ingest"))
     try:
         decision, blocks = parse_bytes(document_id, document.filename, document.media_type, path.read_bytes(), route)
-        chunks = chunk_blocks(blocks)
+        chunks = chunk_blocks(blocks, max_chars, overlap)
         updated = document.model_copy(update={"status": "parsed", "version": document.version + 1, "parser_route": decision.route, "parser_confidence": decision["confidence"], "reason_codes": decision["reason_codes"]})
         app.state.store.update_document(updated)
         app.state.store.save_blocks(blocks)
@@ -553,6 +573,13 @@ def publish_recipe(recipe_id: str):
     return compiled
 
 
+def _clamp(value: Any, low: float, high: float, default: float) -> float:
+    try:
+        return min(high, max(low, float(value)))
+    except (TypeError, ValueError):
+        return default
+
+
 def _execute(request: RunRequest) -> RunResult:
     run_started = time.perf_counter()
     recipe = app.state.store.get_recipe(request.recipe_id)
@@ -567,7 +594,9 @@ def _execute(request: RunRequest) -> RunResult:
     answer: str | None = None
     if request.mode == "preview":
         for node_id in _topological(recipe):
-            recorder.record(node_id, "completed", "Preview：已编译节点，未调用外部模型或写入索引", {"preview": True})
+            node_started = time.perf_counter()
+            node = _node(recipe, node_id)
+            recorder.record(node_id, "completed", "Preview：已编译节点，未调用外部模型或写入索引", {"preview": True, "execution": "preview_compile_only", "node_type": node.type}, started=node_started)
         result = RunResult(run_id=run_id, recipe_id=recipe.recipe_id, recipe_hash=recipe.hash or "", status="completed", trace=recorder.events, safety={"mode": "preview", "side_effects": False})
         observe_run(recipe.recipe_id, "preview", time.perf_counter() - run_started)
     else:
@@ -575,11 +604,12 @@ def _execute(request: RunRequest) -> RunResult:
         risk_codes = _request_is_high_risk(request.question)
         if risk_codes:
             for node_id in _topological(recipe):
+                node_started = time.perf_counter()
                 node = _node(recipe, node_id)
                 if node.type in {"question", "policy_gate", "approval"}:
-                    recorder.record(node_id, "completed", "安全门拒绝高风险结论请求", {"risk_codes": risk_codes, "side_effects": False})
+                    recorder.record(node_id, "completed", "安全门拒绝高风险结论请求", {"risk_codes": risk_codes, "side_effects": False, "execution": "live", "node_type": node.type}, started=node_started)
                 else:
-                    recorder.record(node_id, "skipped", "request_safety_gate 已提前停止该节点", {"risk_codes": risk_codes})
+                    recorder.record(node_id, "skipped", "request_safety_gate 已提前停止该节点", {"risk_codes": risk_codes, "node_type": node.type}, started=node_started)
             answer = "我不能替你认定违法、承诺退款或做账户决定。可以改为：根据知识库中的官方流程，列出需要核对的事实和下一步人工处理项。"
             result = RunResult(run_id=run_id, recipe_id=recipe.recipe_id, recipe_hash=recipe.hash or "", status="completed", answer=answer, artifact=None, evidence=[], trace=recorder.events, safety={"side_effects": False, "request_safety_gate": risk_codes, "human_review": True})
             observe_run(recipe.recipe_id, "refused", time.perf_counter() - run_started)
@@ -598,10 +628,15 @@ def _execute(request: RunRequest) -> RunResult:
             qdrant_hits = []
         for node_id in _topological(recipe):
             node = _node(recipe, node_id)
+            node_started = time.perf_counter()
             if node.type in {"dense_retrieve", "sparse_retrieve", "graph_query", "pdf_page_retrieve"}:
-                qdrant_hits = [hit for hit in qdrant_hits if float(hit.get("score", 0.0)) >= settings.retrieval_score_threshold]
+                # 节点配置真实生效：top_k / score_threshold 优先读节点 config，
+                # 其次退回请求参数与全局设置，越界值收敛到安全区间。
+                node_top_k = int(_clamp(node.config.get("top_k"), 1, 20, request.top_k))
+                node_threshold = _clamp(node.config.get("score_threshold"), 0.0, 1.0, settings.retrieval_score_threshold)
+                qdrant_hits = [hit for hit in qdrant_hits if float(hit.get("score", 0.0)) >= node_threshold]
                 if qdrant_hits:
-                    evidence = [Evidence(citation=f"S{index + 1}", chunk_id=str(hit.get("payload", {}).get("chunk_id", hit.get("id"))), document_id=str(hit.get("payload", {}).get("document_id", "")), title=str(hit.get("payload", {}).get("title", hit.get("payload", {}).get("document_id", ""))), text=str(hit.get("payload", {}).get("text", "")), score=round(float(hit.get("score", 0.0)), 4), metadata=hit.get("payload", {})) for index, hit in enumerate(qdrant_hits[:request.top_k])]
+                    evidence = [Evidence(citation=f"S{index + 1}", chunk_id=str(hit.get("payload", {}).get("chunk_id", hit.get("id"))), document_id=str(hit.get("payload", {}).get("document_id", "")), title=str(hit.get("payload", {}).get("title", hit.get("payload", {}).get("document_id", ""))), text=str(hit.get("payload", {}).get("text", "")), score=round(float(hit.get("score", 0.0)), 4), metadata=hit.get("payload", {})) for index, hit in enumerate(qdrant_hits[:node_top_k])]
                     backend = "qdrant_dense"
                 else:
                     scored = []
@@ -610,34 +645,54 @@ def _execute(request: RunRequest) -> RunResult:
                         if overlap:
                             scored.append((overlap / max(1, len(query_tokens)), chunk))
                     scored.sort(key=lambda item: item[0], reverse=True)
-                    evidence = [Evidence(citation=f"S{index + 1}", chunk_id=chunk.chunk_id, document_id=chunk.document_id, title=chunk.metadata.get("title") or chunk.document_id, text=chunk.text, score=round(score, 4), metadata=chunk.metadata) for index, (score, chunk) in enumerate(scored[: request.top_k])]
+                    evidence = [Evidence(citation=f"S{index + 1}", chunk_id=chunk.chunk_id, document_id=chunk.document_id, title=chunk.metadata.get("title") or chunk.document_id, text=chunk.text, score=round(score, 4), metadata=chunk.metadata) for index, (score, chunk) in enumerate(scored[:node_top_k])]
                     backend = "lexical_fallback"
                     if chunks:
                         # 向量检索退化为词法检索：结果可用但质量下降，必须计入降级指标
                         observe_fallback("qdrant_search")
-                recorder.record(node_id, "completed", f"召回 {len(evidence)} 条候选", {"candidate_count": len(evidence), "backend": backend})
+                # 诚实标注：dense_retrieve 是真实实现；sparse/graph/pdf 节点当前
+                # 共享同一条检索路径，execution 字段明确说明，禁止 UI 装作已实现。
+                if node.type == "dense_retrieve":
+                    execution = "live" if backend == "qdrant_dense" else "fallback_lexical"
+                    summary = f"召回 {len(evidence)} 条候选（{backend}）"
+                else:
+                    execution = "fallback_shared_dense"
+                    summary = f"{node.type} 未实现独立检索：共享稠密/词法路径，返回 {len(evidence)} 条候选"
+                recorder.record(node_id, "completed", summary, {"candidate_count": len(evidence), "backend": backend, "execution": execution, "top_k": node_top_k, "score_threshold": node_threshold, "node_type": node.type}, started=node_started)
             elif node.type in {"context_builder", "reranker", "rrf_fusion"}:
-                recorder.record(node_id, "completed", f"处理 {len(evidence)} 条证据", {"evidence_count": len(evidence)})
+                recorder.record(node_id, "completed", f"占位直通：{node.type} 未实现，证据顺序未改变（{len(evidence)} 条）", {"evidence_count": len(evidence), "execution": "stub_passthrough", "node_type": node.type}, started=node_started)
             elif node.type == "llm_generate":
-                answer, provider = generate_grounded_answer(request.question, evidence, settings)
+                # 生成参数真实生效：temperature / max_tokens / model_ref 来自节点配置。
+                temperature = _clamp(node.config.get("temperature"), 0.0, 2.0, 0.1)
+                max_tokens = int(_clamp(node.config.get("max_tokens"), 64, 4096, 600))
+                gen_settings = settings
+                model_ref = str(node.config.get("model_ref") or "")
+                if model_ref:
+                    bound = app.state.store.get_model(model_ref)
+                    if bound and bound.get("kind") == "chat":
+                        gen_settings = settings.model_copy(update={"chat_base_url": bound["base_url"], "chat_model": bound["model_name"]})
+                answer, provider = generate_grounded_answer(request.question, evidence, gen_settings, temperature=temperature, max_tokens=max_tokens)
                 if evidence and not re.search(r"\[S\d+\]", answer):
                     answer = _extractive_answer(request.question, evidence)
                     provider = "citation_repair_fallback"
                     observe_fallback("citation_repair")
-                recorder.record(node_id, "completed", "生成受证据约束的回答", {"provider": provider, "citation_count": len(evidence), "citation_repaired": provider == "citation_repair_fallback"})
+                execution = "live" if provider == "openai_compatible_chat" else "fallback_extractive"
+                recorder.record(node_id, "completed", "生成受证据约束的回答", {"provider": provider, "citation_count": len(evidence), "citation_repaired": provider == "citation_repair_fallback", "execution": execution, "model": gen_settings.chat_model, "temperature": temperature, "max_tokens": max_tokens, "node_type": node.type}, started=node_started)
             elif node.type == "policy_gate":
-                recorder.record(node_id, "completed", "安全策略通过；未发现外部副作用动作", {"human_review": not bool(evidence)})
+                recorder.record(node_id, "completed", "安全策略通过；未发现外部副作用动作", {"human_review": not bool(evidence), "execution": "live", "node_type": node.type}, started=node_started)
             elif node.type == "approval":
-                recorder.record(node_id, "completed", "停在人工审批门", {"approval_required": True})
+                recorder.record(node_id, "completed", "停在人工审批门", {"approval_required": True, "execution": "live", "node_type": node.type}, started=node_started)
             elif node.type == "build_ticket_draft":
                 normalized = request.question.lower()
                 supplied = {"merchant": bool(re.search(r"merchant|商户", normalized)), "date": bool(re.search(r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b|日期|date", normalized)), "previous_actions": bool(re.search(r"contacted|联系过|此前|previous", normalized))}
                 missing = [field for field, present in supplied.items() if not present]
                 artifact = {"artifact_type": "ticket_draft", "status": "pending_human_approval", "fields": {"message": request.question, "merchant": None, "date": None, "previous_actions": None}, "missing_fields": missing, "evidence_ids": [item.citation for item in evidence], "forbidden_actions": ["send_customer_message", "write_external_crm", "promise_refund", "decide_legal_liability"]}
                 answer = f"已生成客服工单草稿，仍缺少字段：{', '.join(missing) if missing else '无'}。草稿必须经过人工审批。"
-                recorder.record(node_id, "completed", "生成结构化工单草稿，未执行外部动作", {"missing_fields": missing, "approval_required": True})
+                recorder.record(node_id, "completed", "生成结构化工单草稿，未执行外部动作", {"missing_fields": missing, "approval_required": True, "execution": "live", "node_type": node.type}, started=node_started)
+            elif node.type == "question":
+                recorder.record(node_id, "completed", "接收查询问题", {"execution": "live", "node_type": node.type}, started=node_started)
             else:
-                recorder.record(node_id, "completed", f"{node.type} 已执行", {"node_type": node.type})
+                recorder.record(node_id, "completed", f"占位直通：{node.type} 未实现真实逻辑，仅记录经过", {"execution": "stub_passthrough", "node_type": node.type}, started=node_started)
         result = RunResult(run_id=run_id, recipe_id=recipe.recipe_id, recipe_hash=recipe.hash or "", status="completed", answer=answer, artifact=artifact, evidence=evidence, trace=recorder.events, safety={"side_effects": False, "human_review": not bool(evidence) or bool(artifact)})
         observe_run(recipe.recipe_id, "completed", time.perf_counter() - run_started)
     payload = result.model_dump(mode="json")

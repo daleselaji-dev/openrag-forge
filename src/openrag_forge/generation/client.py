@@ -10,7 +10,7 @@ from ..observability import observe_fallback, start_span
 logger = logging.getLogger(__name__)
 
 
-def generate_grounded_answer(question: str, evidence: list[Evidence], settings: Settings) -> tuple[str, str]:
+def generate_grounded_answer(question: str, evidence: list[Evidence], settings: Settings, *, temperature: float = 0.1, max_tokens: int = 600) -> tuple[str, str]:
     """Call an OpenAI-compatible chat endpoint, falling back safely when unavailable.
 
     生产化改造点：
@@ -43,8 +43,8 @@ def generate_grounded_answer(question: str, evidence: list[Evidence], settings: 
                 f"{settings.chat_base_url.rstrip('/')}/chat/completions",
                 json={
                     "model": settings.chat_model,
-                    "temperature": 0.1,
-                    "max_tokens": 600,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
                     "messages": [
                         {"role": "system", "content": "You answer only from supplied evidence."},
                         {"role": "user", "content": prompt},

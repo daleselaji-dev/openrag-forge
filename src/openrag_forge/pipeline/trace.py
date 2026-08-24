@@ -28,7 +28,9 @@ class TraceRecorder:
         self.events: list[TraceEvent] = []
 
     def record(self, node_id: str, status: str, summary: str, details: dict[str, Any] | None = None, started: float | None = None) -> TraceEvent:
-        duration_ms = round((time.perf_counter() - started) * 1000, 2) if started else 0.0
+        # started 由调用方在节点开始时用 time.perf_counter() 采样；
+        # 精度保留到微秒级（3 位小数），保证极快节点的耗时也不会四舍五入成 0。
+        duration_ms = round((time.perf_counter() - started) * 1000, 3) if started is not None else 0.0
         event = TraceEvent(
             run_id=self.run_id,
             node_id=node_id,
