@@ -1,0 +1,48 @@
+# =============================================================================
+# OpenTelemetry Collector 配置（追踪管道的中枢）
+#
+# 数据流：应用(OTLP) → receivers → processors → exporters → Jaeger
+# 换后端（Tempo / Datadog / 阿里云 ARMS…）只需要改 exporters 段，应用零改动——
+# 这就是引入 Collector 这层间接性的价值。
+#
+# 生效位置：docker-compose.yml 把本文件挂载到 otel-collector 容器；
+# K8s 部署时改用 OpenTelemetry Operator 或 DaemonSet + ConfigMap。
+# =============================================================================
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # memory_limiter 必须放第一个：Collector 内存超限时主动拒收，
+  # 防止追踪洪峰把 Collector 打挂导致全部遥测数据丢失
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+  # 批量发送降低网络与后端写入压力（生产必备）
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+exporters:
+  # Jaeger 从 1.35 起原生接收 OTLP，无需专用 exporter
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true  # compose 内网；生产跨节点传输应启用 mTLS
+  # debug exporter 将 span 打到 Collector 日志，排查"span 到底有没有发出来"时打开
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/jaeger]
+      # 排障时改为: exporters: [otlp/jaeger, debug]

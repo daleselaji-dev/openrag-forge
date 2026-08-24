@@ -38,6 +38,28 @@ The first public framework baseline includes:
 - Scenario Gallery presets for customer support, internal policy and controlled customer Agent demonstrations;
 - `custom_ingest` Recipe for selecting an Embedding model before uploading user documents.
 
+## Production readiness（生产级能力）
+
+这个仓库同时是一份"如何把项目做到生产级"的教学样例——关键代码、配置与部署清单里都有注释解释每个决策的动机：
+
+- **可观测性**：OpenTelemetry 分布式追踪（业务 Recipe 节点与 Qdrant/LLM 调用都出现在 Jaeger 瀑布图）、JSON 结构化日志（自动携带 request_id / trace_id）、Prometheus 指标（含降级次数计数器）。一键启动本地栈：
+
+```bash
+OPENRAG_OTEL_ENABLED=true docker compose --profile observability up -d
+# Jaeger http://localhost:16686 · Prometheus :19090 · Grafana :13000
+```
+
+- **可靠性**：`/livez` `/readyz` 健康探针、优雅关机（flush 追踪缓冲 + 关闭连接池）、出站连接池与逐类显式超时、SQLite WAL 并发加固、降级路径全程可见；
+- **安全**：可选 API key 认证（常数时间比较）、可配置 CORS、限流兜底、安全响应头、非 root 容器；
+- **配置管理**：全部走 `OPENRAG_*` 环境变量，`environment=production` 时自动输出生产就绪告警（`/api/v1/health` 的 `production_readiness` 字段）。
+
+| 文档 | 内容 |
+|---|---|
+| `docs/configuration.md` | 每个配置项在哪里改、生产建议值 |
+| `docs/observability.md` | 如何查看每个组件的 trace / 指标 / 日志 |
+| `docs/deployment.md` | 本地 → Compose → Kubernetes 三档部署 |
+| `docs/production-checklist.md` | 上线逐项清单（映射到仓库内落地位置） |
+
 ## What makes it different
 
 - **Recipe Compiler**: a drag-and-drop graph is compiled into a typed, immutable, hash-addressed Recipe before it can run.

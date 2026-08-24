@@ -99,6 +99,8 @@ def setup_logging(log_level: str, log_format: str) -> None:
     # uvicorn 自带的 access log 不含 request_id/trace_id，与我们的访问日志重复；
     # 关闭它，统一使用 middleware.RequestContextMiddleware 输出的结构化访问日志。
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    # httpx 每次出站请求打一条 INFO，信息已包含在我们的 span 与降级日志里，降噪。
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def get_logger(name: str) -> logging.Logger:

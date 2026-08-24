@@ -1,0 +1,45 @@
+# Service：集群内稳定访问入口。对外暴露不要用 NodePort/LoadBalancer 直连，
+# 而是经 Ingress（TLS 终结、HSTS、WAF 都在那一层做，见 docs/deployment.md）。
+apiVersion: v1
+kind: Service
+metadata:
+  name: openrag-forge
+  labels:
+    app: openrag-forge
+spec:
+  type: ClusterIP
+  selector:
+    app: openrag-forge
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+---
+# Ingress 示例（按集群实际的 IngressClass 与证书管理器调整）
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: openrag-forge
+  annotations:
+    # cert-manager 自动签发/续期 TLS 证书
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # 网关层限流：跨副本精确，是应用内限流（单副本兜底）之上的第一道闸
+    nginx.ingress.kubernetes.io/limit-rps: "20"
+    # 与 OPENRAG_MAX_UPLOAD_MB 对齐，双重保护
+    nginx.ingress.kubernetes.io/proxy-body-size: "64m"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [kb.example.com]
+      secretName: openrag-forge-tls
+  rules:
+    - host: kb.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: openrag-forge
+                port:
+                  number: 80

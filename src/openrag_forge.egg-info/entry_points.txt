@@ -1,2 +1,0 @@
-[console_scripts]
-openrag = openrag_forge.cli:main

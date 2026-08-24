@@ -1,0 +1,29 @@
+# 非敏感配置 → ConfigMap（敏感配置见 secret.example.yaml，两者分离是硬性纪律）
+# 应用方式：kubectl apply -f deploy/k8s/
+# 修改配置后需要滚动重启使 Pod 重新读取：kubectl rollout restart deploy/openrag-forge
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openrag-forge-config
+  labels:
+    app: openrag-forge
+data:
+  OPENRAG_PROFILE: "lite"
+  OPENRAG_ENVIRONMENT: "production"
+  OPENRAG_DATA_DIR: "/app/data"
+  # 集群内服务发现：直接用 Service 名（跨命名空间用 name.namespace.svc）
+  OPENRAG_QDRANT_URL: "http://qdrant:6333"
+  OPENRAG_CHAT_BASE_URL: "http://llm-gateway:8000/v1"
+  OPENRAG_EMBEDDING_BASE_URL: "http://llm-gateway:8000/v1"
+  OPENRAG_CHAT_MODEL: "qwen2.5-14b-instruct"
+  OPENRAG_EMBEDDING_MODEL: "bge-m3"
+  # ---- 生产可观测性：全开 ----
+  OPENRAG_LOG_FORMAT: "json"
+  OPENRAG_LOG_LEVEL: "info"
+  OPENRAG_OTEL_ENABLED: "true"
+  OPENRAG_OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector.observability:4318"
+  OPENRAG_OTEL_SAMPLE_RATIO: "0.2"   # 高流量集群按需下调，ParentBased 保证链路完整
+  OPENRAG_METRICS_ENABLED: "true"
+  # ---- 生产安全 ----
+  OPENRAG_CORS_ALLOW_ORIGINS: "https://kb.example.com"   # 换成你的前端域名
+  OPENRAG_RATE_LIMIT_PER_MINUTE: "120"

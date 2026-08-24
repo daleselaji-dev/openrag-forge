@@ -1,0 +1,106 @@
+# =============================================================================
+# Kubernetes Deployment（生产部署的核心清单，逐行讲解版）
+#
+# 部署：kubectl apply -f deploy/k8s/
+# 观察：kubectl rollout status deploy/openrag-forge
+#       kubectl logs deploy/openrag-forge -f | jq .   ← JSON 日志直接可解析
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openrag-forge
+  labels:
+    app: openrag-forge
+spec:
+  # Lite 档位的 SQLite 真相源 + RWO 卷决定了单副本；
+  # 要横向扩容：切换 production profile（PostgreSQL + MinIO）后再调 replicas，
+  # 并把内置限流迁移到网关层（内存限流不跨副本，见 security.py 注释）。
+  replicas: 1
+  strategy:
+    type: Recreate   # RWO 卷不能被两个 Pod 同时挂载，滚动更新会卡住；换 PG 后改回 RollingUpdate
+  selector:
+    matchLabels:
+      app: openrag-forge
+  template:
+    metadata:
+      labels:
+        app: openrag-forge
+      annotations:
+        # 无 Prometheus Operator 时的抓取自动发现方式
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      # 与 Dockerfile 的 --timeout-graceful-shutdown 30 协同：
+      # 总窗口(45s) > preStop(5s) + uvicorn 优雅关机(30s)，保证不出现强杀
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001      # 与 Dockerfile 中创建的用户一致
+        fsGroup: 10001        # 让挂载卷对该用户可写
+      containers:
+        - name: api
+          image: ghcr.io/your-org/openrag-forge:0.2.0   # 用不可变 tag/digest，禁止 latest
+          ports:
+            - containerPort: 8000
+          # 配置注入：ConfigMap（非敏感）+ Secret（敏感），全部以环境变量呈现，
+          # 应用侧无需感知来源——这是 12-Factor 配置的 K8s 落地形态
+          envFrom:
+            - configMapRef:
+                name: openrag-forge-config
+            - secretRef:
+                name: openrag-forge-secrets
+          # ---- 探针三分法（与应用端点一一对应，语义见 app.py 注释）----
+          livenessProbe:        # 失败 → 重启容器（只查进程存活，绝不查外部依赖）
+            httpGet: { path: /livez, port: 8000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:       # 失败 → 从 Service 摘流量，不重启
+            httpGet: { path: /readyz, port: 8000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 2
+          startupProbe:         # 启动宽限：通过前 liveness/readiness 不生效，防慢启动被误杀
+            httpGet: { path: /livez, port: 8000 }
+            periodSeconds: 5
+            failureThreshold: 12   # 最多容忍 60s 启动
+          lifecycle:
+            preStop:
+              # 优雅下线关键一步：K8s 摘除 Endpoint 与 SIGTERM 是并发的，
+              # sleep 让负载均衡器先完成摘除，避免新请求打到正在关闭的 Pod
+              exec:
+                command: ["sh", "-c", "sleep 5"]
+          # 资源声明是调度与稳定性的基础：requests 决定调度，limits 防失控。
+          # 数值来源：先压测观察 P99 内存/CPU，留 30~50% 余量，之后按监控迭代
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false   # SQLite/上传需要写 /app/data；换 PG+S3 后可设 true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: openrag-forge-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openrag-forge-data
+  labels:
+    app: openrag-forge
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi

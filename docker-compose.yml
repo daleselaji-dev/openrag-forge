@@ -1,8 +1,28 @@
+# =============================================================================
+# Compose 编排（用 profile 实现"按需付费"的部署档位）
+#
+#   docker compose up -d qdrant api                    Lite：API + 向量索引
+#   docker compose --profile observability up -d       + OTel Collector / Jaeger /
+#                                                        Prometheus / Grafana
+#   docker compose --profile production up -d          + Postgres / Redis / MinIO
+#
+# 可观测性入口（启动 observability profile 后）：
+#   Jaeger 追踪 UI    http://localhost:16686   ← 查看每个请求/每个 RAG 节点的耗时瀑布图
+#   Prometheus        http://localhost:19090   ← 原始指标与即席查询
+#   Grafana           http://localhost:13000   ← 仪表盘（默认账号 admin / change-me）
+# =============================================================================
+
 services:
   qdrant:
     image: qdrant/qdrant:v1.17.0
     ports: ["16333:6333"]
     volumes: [qdrant_data:/qdrant/storage]
+    # 健康检查让 api 的 depends_on 能等待"真正可用"而不是"进程已启动"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   api:
     build: .
@@ -11,16 +31,92 @@ services:
       OPENRAG_PROFILE: lite
       OPENRAG_QDRANT_URL: http://qdrant:6333
       OPENRAG_DATA_DIR: /app/data
+      # ---- 可观测性开关：生产环境建议全部开启 ----
+      # 改这里 = 改容器部署的配置；本地开发改 .env；K8s 改 configmap.yaml
+      OPENRAG_LOG_FORMAT: ${OPENRAG_LOG_FORMAT:-json}
+      OPENRAG_OTEL_ENABLED: ${OPENRAG_OTEL_ENABLED:-false}
+      OPENRAG_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OPENRAG_ENVIRONMENT: ${OPENRAG_ENVIRONMENT:-dev}
+      # 敏感项从宿主环境注入（CI/CD Secret 或 shell export），不落盘到 compose 文件
+      OPENRAG_API_KEY: ${OPENRAG_API_KEY:-}
+    # bind mount 便于本地直接查看 SQLite 与 Evidence Capsule；
+    # 镜像内进程以 UID 10001 运行，宿主目录需 chown -R 10001 ./data，
+    # 不想管权限就换成命名卷：- openrag_data:/app/data
     volumes: [./data:/app/data]
-    depends_on: [qdrant]
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=2)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    # 优雅关机：给 uvicorn 的 --timeout-graceful-shutdown(30s) 留出余量，
+    # 超时 compose 才发 SIGKILL 强杀
+    stop_grace_period: 35s
 
+  # ---------------------------------------------------------------------------
+  # 可观测性栈（--profile observability）
+  # 数据流：api --OTLP--> otel-collector --> jaeger（追踪）
+  #        prometheus --scrape--> api:/metrics（指标）
+  #        grafana --> prometheus + jaeger（统一查看）
+  # 为什么中间要有 Collector：应用只说 OTLP 一种协议，后端从 Jaeger 换成
+  # Tempo/厂商 APM 时只改 Collector 配置，不动应用。
+  # ---------------------------------------------------------------------------
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.116.1
+    profiles: [observability]
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./deploy/otel-collector-config.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "14318:4318"   # OTLP HTTP（供宿主机上直接跑的 API 调试用）
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    profiles: [observability]
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"  # 追踪查询 UI
+    # 教学提示：all-in-one 内存存储仅用于开发；生产用 jaeger-collector +
+    # Elasticsearch/Cassandra，或换 Grafana Tempo + 对象存储。
+
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    profiles: [observability]
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "19090:9090"
+
+  grafana:
+    image: grafana/grafana:11.4.0
+    profiles: [observability]
+    environment:
+      # 生产环境必须改掉默认口令，并接入企业 SSO（OAuth/LDAP）
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me}
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "13000:3000"
+
+  # ---------------------------------------------------------------------------
+  # 生产存储档位（--profile production）：把真相源从 SQLite 换成 PostgreSQL，
+  # 上传文件换成 MinIO/S3，Redis 供缓存与跨副本限流。
+  # 注意口令必须改：生产用 CI/CD Secret 注入，绝不提交明文。
+  # ---------------------------------------------------------------------------
   postgres:
     image: postgres:16-alpine
     profiles: [production]
     environment:
       POSTGRES_DB: openrag
       POSTGRES_USER: openrag
-      POSTGRES_PASSWORD: change-me
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
     volumes: [postgres_data:/var/lib/postgresql/data]
 
   redis:
@@ -34,12 +130,13 @@ services:
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: openrag
-      MINIO_ROOT_PASSWORD: change-me-now
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change-me-now}
     volumes: [minio_data:/data]
 
 volumes:
   qdrant_data:
+  prometheus_data:
+  grafana_data:
   postgres_data:
   redis_data:
   minio_data:
-
