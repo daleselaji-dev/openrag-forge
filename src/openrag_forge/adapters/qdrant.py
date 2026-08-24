@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from uuid import NAMESPACE_URL, uuid5
 
 import httpx
@@ -20,7 +19,10 @@ class QdrantAdapter:
         return f"{self.config.embedding_base_url.rstrip('/')}/embeddings"
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        response = httpx.post(self._embedding_url(), json={"model": self.config.embedding_model, "input": texts}, timeout=60)
+        headers = {"Content-Type": "application/json"}
+        if self.config.embedding_api_key:
+            headers["Authorization"] = f"Bearer {self.config.embedding_api_key}"
+        response = httpx.post(self._embedding_url(), headers=headers, json={"model": self.config.embedding_model, "input": texts}, timeout=60)
         response.raise_for_status()
         payload = response.json()
         return [item["embedding"] for item in sorted(payload.get("data", []), key=lambda item: item.get("index", 0))]

@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     chat_model: str = "local-chat-model"
     embedding_model: str = "local-embedding-model"
     reranker_model: str = ""
+    # API key 只在服务端使用（环境变量注入），永远不返回给前端、不写入 Trace/Capsule
+    chat_api_key: str = ""
+    embedding_api_key: str = ""
+    reranker_api_key: str = ""
     max_upload_mb: int = 64
     retrieval_score_threshold: float = 0.5
     trace_persistence: bool = True

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import time
 from typing import Any
-from uuid import uuid4
 
 from ..domain.models import TraceEvent
 from ..store import Store
