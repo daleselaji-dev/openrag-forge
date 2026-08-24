@@ -1,0 +1,11 @@
+{
+  "name": "CFPB Customer Support public sources",
+  "authority_policy": {"official_guidance": 2, "consumer_allegation": 1},
+  "sources": [
+    {"id":"complaints", "kind":"public_dataset", "url":"https://www.consumerfinance.gov/data-research/consumer-complaints/"},
+    {"id":"company_process", "kind":"official_guidance", "url":"https://www.consumerfinance.gov/compliance/consumer-complaint-program/company-process/"},
+    {"id":"credit_card_dispute", "kind":"official_guidance", "url":"https://www.consumerfinance.gov/ask-cfpb/how-do-i-dispute-a-charge-on-my-credit-card-bill-en-61/"},
+    {"id":"reg_z_1026_13", "kind":"regulation", "url":"https://www.consumerfinance.gov/rules-policy/regulations/1026/13/"}
+  ]
+}
+

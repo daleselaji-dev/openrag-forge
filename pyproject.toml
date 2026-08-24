@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openrag-forge"
+version = "0.1.0"
+description = "A traceable, composable and lightweight RAG knowledge base framework."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "OpenRAG Forge contributors" }]
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.34,<1",
+  "python-multipart>=0.0.20,<1",
+  "pydantic>=2.10,<3",
+  "pydantic-settings>=2.8,<3",
+  "qdrant-client>=1.17,<2",
+  "httpx>=0.28,<1",
+  "beautifulsoup4>=4.13,<5",
+  "pypdf>=5.3,<6",
+]
+
+[project.optional-dependencies]
+office = ["docling>=2.30,<3"]
+production = [
+  "sqlalchemy>=2,<3",
+  "psycopg[binary]>=3.2,<4",
+  "minio>=7.2,<8",
+  "redis>=5.2,<6",
+  "celery[redis]>=5.4,<6",
+]
+observability = [
+  "opentelemetry-api>=1.29,<2",
+  "opentelemetry-sdk>=1.29,<2",
+  "opentelemetry-exporter-otlp>=1.29,<2",
+  "prometheus-client>=0.21,<1",
+]
+graph = ["neo4j>=5.28,<6"]
+dev = ["pytest>=8.3,<9", "pytest-asyncio>=0.25,<1", "ruff>=0.9,<1"]
+all = ["openrag-forge[office,production,observability,graph,dev]"]
+
+[project.scripts]
+openrag = "openrag_forge.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+

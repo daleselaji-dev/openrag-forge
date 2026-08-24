@@ -1,0 +1,24 @@
+{
+  "recipe_id": "support_v0_2_hybrid",
+  "name": "Support Pack / Dense + Sparse + RRF",
+  "version": "0.2.0",
+  "status": "draft",
+  "nodes": [
+    {"id":"q","type":"question"}, {"id":"d","type":"dense_retrieve"},
+    {"id":"s","type":"sparse_retrieve"}, {"id":"f","type":"rrf_fusion"},
+    {"id":"c","type":"context_builder"}, {"id":"g","type":"llm_generate"},
+    {"id":"p","type":"policy_gate"}
+  ],
+  "edges": [
+    {"source":"q","source_port":"query","target":"d","target_port":"query"},
+    {"source":"q","source_port":"query","target":"s","target_port":"query"},
+    {"source":"d","source_port":"candidates","target":"f","target_port":"candidates"},
+    {"source":"s","source_port":"candidates","target":"f","target_port":"candidates"},
+    {"source":"f","source_port":"candidates","target":"c","target_port":"candidates"},
+    {"source":"q","source_port":"query","target":"g","target_port":"query"},
+    {"source":"c","source_port":"context","target":"g","target_port":"context"},
+    {"source":"g","source_port":"answer","target":"p","target_port":"answer"},
+    {"source":"c","source_port":"evidence","target":"p","target_port":"evidence"}
+  ],
+  "metadata_policy": {"official_guidance_priority": true, "consumer_claims_are_not_findings": true}
+}

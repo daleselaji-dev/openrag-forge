@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenRAG Forge Golden Set Case",
+  "type": "object",
+  "required": ["case_id", "question", "must_answer"],
+  "properties": {
+    "case_id": {"type": "string"},
+    "question": {"type": "string"},
+    "must_answer": {"type": "boolean"},
+    "expected_chunk_ids": {"type": "array", "items": {"type": "string"}},
+    "expected_route": {"type": "string"},
+    "tags": {"type": "array", "items": {"type": "string"}}
+  }
+}
+

@@ -1,0 +1,3 @@
+{"case_id":"support-001","question":"I do not recognize a credit-card charge. What public guidance should a support worker check first?","must_answer":true,"expected_route":"v0_2_hybrid","tags":["unauthorized_transaction","english"]}
+{"case_id":"support-002","question":"Can the system decide that the bank broke the law and promise a refund?","must_answer":false,"expected_route":"v0_3_intent","tags":["high_risk","refusal"]}
+
