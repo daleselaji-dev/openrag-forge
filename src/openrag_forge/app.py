@@ -70,6 +70,18 @@ class ModelRegistration(BaseModel):
     source: Literal["endpoint", "manifest"] = "endpoint"
 
 
+class ScenarioDefinition(BaseModel):
+    scenario_id: str = Field(min_length=1, max_length=120)
+    title: str = Field(min_length=1, max_length=160)
+    business_problem: str = Field(min_length=1, max_length=800)
+    recipe_id: str = Field(min_length=1, max_length=120)
+    sample_question: str = Field(min_length=3, max_length=3000)
+    data_requirements: list[str] = Field(default_factory=list, max_length=20)
+    trace_expectation: list[str] = Field(default_factory=list, max_length=30)
+    source_urls: list[str] = Field(default_factory=list, max_length=20)
+    source: Literal["builtin", "user"] = "user"
+
+
 SCENARIOS = [
     {"scenario_id": "customer_support", "title": "客服投诉助手", "business_problem": "一线客服需要在回答前快速核对官方流程与相似案例。", "recipe_id": "v0_2_hybrid", "sample_question": "客户说信用卡上有一笔不认识的扣款，客服应该先核对哪些信息？", "data_requirements": ["官方 FAQ / SOP", "产品政策", "脱敏历史工单"], "trace_expectation": ["Dense/Sparse candidates", "RRF", "evidence", "citation", "policy gate"], "source_urls": ["https://www.consumerfinance.gov/data-research/consumer-complaints/"]},
     {"scenario_id": "internal_policy", "title": "企业内部政策问答", "business_problem": "员工需要查询版本化的 HR、IT 或合规 SOP，并且不能混用过期政策。", "recipe_id": "v0_4_rerank", "sample_question": "这份内部政策要求审批人核对哪些材料？", "data_requirements": ["版本化政策 PDF/DOCX", "审批 SOP", "生效日期 Metadata"], "trace_expectation": ["metadata filter", "hybrid candidates", "rerank", "citation"], "source_urls": []},
@@ -173,6 +185,8 @@ async def lifespan(app: FastAPI):
     for model in configured_models:
         if store.get_model(model["model_id"]) is None:
             store.save_model(model["model_id"], model)
+    for scenario in SCENARIOS:
+        store.save_scenario(scenario["scenario_id"], {**scenario, "source": "builtin"})
     app.state.store = store
     app.state.qdrant = QdrantAdapter(settings)
     yield
@@ -319,7 +333,14 @@ async def plugins():
 
 @app.get("/api/v1/scenarios")
 async def scenarios():
-    return {"items": SCENARIOS, "note": "Scenario 运行使用当前选中的知识库；示例中的业务资料必须先导入或连接官方 Pack。"}
+    return {"items": app.state.store.list_scenarios(), "note": "Scenario 运行使用当前选中的知识库；示例中的业务资料必须先导入或连接官方 Pack。"}
+
+
+@app.post("/api/v1/scenarios")
+async def create_scenario(scenario: ScenarioDefinition):
+    payload = scenario.model_copy(update={"source": "user"}).model_dump()
+    app.state.store.save_scenario(scenario.scenario_id, payload)
+    return {"status": "registered", "scenario": payload}
 
 
 @app.get("/api/v1/models")

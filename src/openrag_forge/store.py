@@ -52,6 +52,10 @@ class Store:
                   model_id TEXT PRIMARY KEY, payload TEXT NOT NULL,
                   created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS scenarios (
+                  scenario_id TEXT PRIMARY KEY, payload TEXT NOT NULL,
+                  created_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS runs (
                   run_id TEXT PRIMARY KEY, payload TEXT NOT NULL,
                   created_at TEXT NOT NULL
@@ -137,6 +141,15 @@ class Store:
     def list_models(self) -> list[dict[str, Any]]:
         with self._connect() as db:
             rows = db.execute("SELECT payload FROM model_registry ORDER BY created_at").fetchall()
+        return [json.loads(row["payload"]) for row in rows]
+
+    def save_scenario(self, scenario_id: str, payload: dict[str, Any]) -> None:
+        with self._connect() as db:
+            db.execute("INSERT OR REPLACE INTO scenarios VALUES (?, ?, ?)", (scenario_id, json.dumps(payload, ensure_ascii=False), utc_now()))
+
+    def list_scenarios(self) -> list[dict[str, Any]]:
+        with self._connect() as db:
+            rows = db.execute("SELECT payload FROM scenarios ORDER BY created_at").fetchall()
         return [json.loads(row["payload"]) for row in rows]
 
     def save_run(self, payload: dict[str, Any]) -> None:
