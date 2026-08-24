@@ -8,6 +8,17 @@ The project combines a small local-first core with optional production profiles.
 
 ## Quick start
 
+Linux / macOS:
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env
+uvicorn openrag_forge.app:app --reload --port 18000
+```
+
+Windows (PowerShell):
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -16,7 +27,7 @@ Copy-Item .env.example .env
 uvicorn openrag_forge.app:app --reload --port 18000
 ```
 
-Open `http://localhost:18000`. The Lite profile starts without Postgres, MinIO, Redis, Neo4j or an Agent worker. Point `.env` at a running Qdrant and OpenAI-compatible model service when you are ready to index and answer.
+Open `http://localhost:18000` — the full assembly workbench is served at `/` (build it once with `cd web && npm install && npm run build`, or run `npm run dev` for the Vite dev server which proxies `/api`). The Lite profile starts without Postgres, MinIO, Redis, Neo4j or an Agent worker: upload/parse, BM25 retrieval, extractive answers, Trace and Evidence Capsules all work fully offline. Point `.env` (or the workbench "导入 API / 模型" drawer) at a running Qdrant and OpenAI-compatible model service when you are ready for dense indexing and model-generated answers.
 
 To run the full Lite stack with Qdrant:
 
@@ -50,13 +61,15 @@ Four ideas carry the whole architecture (full rationale, alternatives and trade-
 The framework baseline includes:
 
 - upload and content-aware parser routing for text, Markdown, HTML, PDF, Office XML, CSV/XLSX and JSON, with per-decision `confidence` and `reason_codes`;
-- Block and Chunk persistence with source version, SHA-256 and parser reason codes; reprocessing bumps the version instead of overwriting the source;
-- typed Recipe compilation for an 11-recipe ladder from `v0_1_dense` to `v1_controlled_agent` (see [`docs/design.md`](docs/design.md) §3.2);
-- Preview, real run, Trace and downloadable Evidence Capsule APIs;
-- a model registry for OpenAI-compatible chat/embedding/reranker endpoints — connection profiles only, weights never enter the web app;
-- React + React Flow workbench with request-abort protection when switching Recipes quickly;
+- Block and Chunk persistence with source version, SHA-256 and parser reason codes; reprocessing (with a different route or chunker config) bumps the version instead of overwriting the source;
+- real metadata enrichment (title / language / keywords) applied at ingest and visible in chunk metadata, Qdrant payloads and evidence;
+- typed Recipe compilation for an 11-recipe ladder from `v0_1_dense` to `v1_controlled_agent` (see [`docs/design.md`](docs/design.md) §3.2), plus Recipe JSON import/export;
+- a real dataflow executor: built-in BM25 sparse retrieval, real RRF fusion, parent-child expansion, context token-budget, bounded corrective retry (hard cap 2), in-memory cache and rate-limit envelopes, and an OpenAI-compatible `/rerank` path — every fallback, passthrough and skip is recorded in the Trace with impact fields (see [`docs/modules.md`](docs/modules.md));
+- Preview (dry compile), real run, run history, Trace and downloadable Evidence Capsule APIs;
+- a model registry for OpenAI-compatible chat/embedding/reranker endpoints with optional per-model API keys stored server-side and masked in every response — connection profiles only, weights never enter the web app;
+- a production multi-panel React + React Flow workbench: grouped node palette with per-block explanations and honest runtime badges, assembly canvas with trace highlighting, an inspector that always answers "trace / block role / how to tune", document & ParsedBlock viewer, import drawers and a download/self-host panel (request-abort protection preserved);
 - Scenario Gallery presets for customer support, internal policy and controlled customer Agent demonstrations;
-- `custom_ingest` Recipe for selecting an Embedding model before uploading user documents;
+- `custom_ingest` Recipe whose node configs (route, chunker, enricher, embedding model) actually drive ingest;
 - two reproducible evaluation harnesses (smoke benchmark and labeled Golden Eval) plus an on-line Eval API.
 
 ## Experiments and evaluation results
@@ -111,13 +124,14 @@ The compiler catalog, Store port, profile extras and Pack isolation are delibera
 
 The current branch is the framework extraction baseline. The CFPB consumer-support implementation lives in `packs/customer-support-cfpb` and is intentionally separate from the generic core.
 
-Known limitations, stated deliberately: several retrieval-enhancement nodes (sparse, RRF, reranker, graph, PDF-page) are compile-time complete but execution-level pass-throughs today ([`docs/design.md`](docs/design.md) §3.3); the evaluation corpus is one local document; production Store adapters are declared but not implemented; raw eval report JSON under `reports/` is gitignored — committed snapshots are a release requirement.
+Known limitations, stated deliberately ([`docs/modules.md`](docs/modules.md) 末节): `graph_query` remains a compile-complete / runtime-stub node (needs Neo4j) and is labelled as such in the UI and Trace; `sparse_retrieve` runs on a real built-in BM25 backend but the Qdrant named-sparse backend is not wired yet; `reranker` performs a real `/rerank` call only when a compatible endpoint is registered and otherwise records an honest passthrough; cache/rate-limit are in-process (no Redis); the evaluation corpus is one local document; production Store adapters (Postgres/MinIO) are declared but not implemented; raw eval report JSON under `reports/` is gitignored — committed snapshots are a release requirement.
 
 ## Documentation map
 
 | Document | Contents |
 |---|---|
 | [`docs/design.md`](docs/design.md) | Design rationale: every key decision, its alternatives and trade-offs, with source paths |
+| [`docs/modules.md`](docs/modules.md) | 中文：每个产品板块的生产级模块设计（契约 / API / UI / 失败模式 / 调参旋钮 / Trace 呈现） |
 | [`docs/architecture.md`](docs/architecture.md) | One-page architecture contract |
 | [`docs/recipes.md`](docs/recipes.md) | Recipe DAG / compiler contract |
 | [`docs/experiments.md`](docs/experiments.md) | Experiment log: failures, fixes, before/after numbers, and experiments still to run |

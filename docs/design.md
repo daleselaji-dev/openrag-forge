@@ -83,10 +83,13 @@ Question → Recipe Compiler → Retrieve → Context → Generate → Policy Ga
 
 ### 3.3 执行器的诚实边界（重要）
 
-当前基线执行器（`app.py` `_execute`）对节点的实现深度不一，这是**有意公开的事实**而非隐藏细节：
+执行器（`src/openrag_forge/pipeline/executor.py`）按已编译 DAG 的真实数据流逐节点执行，节点目录（`/api/v1/plugins`）用 `runtime` 字段公开每个节点的实现深度，工作台组件库与检查器展示同一标签：
 
-- **真实实现**：dense 检索（Qdrant + 分数阈值 0.5 + 真相源过滤 + 词法回退）、LLM 生成（OpenAI 兼容端点 + 三级降级 + 引用修复）、请求级安全门、工单草稿与审批停靠、Trace 与 Capsule 落盘。
-- **记录性实现**：`sparse_retrieve` / `rrf_fusion` / `reranker` / `graph_query` / `pdf_page_retrieve` 等节点当前在编译层有完整类型约束，但在运行层复用同一召回结果或仅记录证据数量。也就是说 **V0.2–V0.8 的图结构差异是真实的，运行时行为差异目前有限**。把这些节点接到真实后端（Qdrant named sparse、cross-encoder 服务、Neo4j）是 roadmap 的第一优先级（见 `docs/roadmap.md`）。
+- **implemented（运行级实现）**：dense 检索（Qdrant + 阈值 + 真相源过滤 + 词法回退）、sparse 检索（内置纯 Python BM25，`backend=bm25_local`）、RRF 融合（≥2 路候选真实融合，单路直通并标注）、parent expansion（真相源相邻 Chunk 扩展）、context builder（去重 + token 预算截断）、evidence grade + bounded corrective（显式上限重试，硬上限 2）、metadata filter、intent router（规则）、pdf_page_retrieve（页级 BM25）、cache / rate_limit（进程内）、LLM 生成（OpenAI 兼容端点 + 三级降级 + 引用修复）、请求级安全门、工单草稿与审批停靠、Trace 与 Capsule 落盘。
+- **degradable（后端可降级）**：`reranker` —— 绑定的模型端点提供 Cohere/Jina/TEI 兼容 `/rerank` 时真实调用；否则截断直通并在 Trace 记 `backend=passthrough + 原因`，绝不静默伪装。
+- **stub（compile-complete / runtime-stub）**：`graph_query` —— 编译期端口类型完整，运行层暂无 Neo4j 后端，执行时记 `skipped + next_action`。Qdrant named-sparse 后端同样未接（配置该 backend 会记录回退到 bm25_local）。
+
+每条 TraceEvent 的 `details.impact` 携带 UI 可渲染的影响字段（候选数量、backend、证据 ID、降级/跳过原因、重试次数、预算丢弃数、脱敏后的 config_used），详见 `docs/modules.md` §7。
 
 ### 3.4 检索降级与引用修复
 
@@ -127,8 +130,9 @@ Question → Recipe Compiler → Retrieve → Context → Generate → Policy Ga
 
 ## 7. 边界与已知限制（如实陈述）
 
-1. 运行层多个检索增强节点是记录性实现（见 3.3）；
-2. 评测语料目前只有 1 个本地文档、7 个标注 case，置信区间刻意报告得很宽，**不构成企业级质量声明**；
-3. `Store` 的生产适配器（Postgres/MinIO）只定义了端口与 extras 依赖，实现未提交；
-4. sparse / rerank / graph / 多模态检索无真实后端；
-5. 原始评测 JSON 报告（`reports/`）被 gitignore，仓库内只保留文档化结论——发布级评测应把冻结快照一并入库（见 `docs/roadmap.md`）。
+1. `graph_query` 仍是 runtime-stub（需要 graph profile + Neo4j）；`reranker` 依赖外部 `/rerank` 端点，无端点时如实直通（见 3.3）；
+2. `sparse_retrieve` 的内置 BM25 是真实但**本地**的稀疏检索；Qdrant named-sparse 后端未接；
+3. cache / rate_limit 为进程内实现（重启失效），未接 Redis；
+4. 评测语料目前只有 1 个本地文档、7 个标注 case，置信区间刻意报告得很宽，**不构成企业级质量声明**；
+5. `Store` 的生产适配器（Postgres/MinIO）只定义了端口与 extras 依赖，实现未提交；
+6. 原始评测 JSON 报告（`reports/`）被 gitignore，仓库内只保留文档化结论——发布级评测应把冻结快照一并入库（见 `docs/roadmap.md`）。
