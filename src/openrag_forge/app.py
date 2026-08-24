@@ -460,6 +460,8 @@ async def _execute(request: RunRequest) -> RunResult:
         try:
             if chunks:
                 qdrant_hits = app.state.qdrant.search(request.question, request.top_k)
+                truth_chunk_ids = {chunk.chunk_id for chunk in chunks}
+                qdrant_hits = [hit for hit in qdrant_hits if str(hit.get("payload", {}).get("chunk_id", "")) in truth_chunk_ids]
         except Exception:
             qdrant_hits = []
         for node_id in _topological(recipe):

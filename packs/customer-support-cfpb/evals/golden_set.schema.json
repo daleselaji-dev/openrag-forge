@@ -8,8 +8,11 @@
     "question": {"type": "string"},
     "must_answer": {"type": "boolean"},
     "expected_chunk_ids": {"type": "array", "items": {"type": "string"}},
+    "expected_source_filenames": {"type": "array", "items": {"type": "string"}},
+    "expected_terms": {"type": "array", "items": {"type": "string"}},
+    "intent": {"type": "string"},
+    "risk_level": {"type": "string"},
     "expected_route": {"type": "string"},
     "tags": {"type": "array", "items": {"type": "string"}}
   }
 }
-

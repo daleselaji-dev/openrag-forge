@@ -51,3 +51,4 @@ The current branch is the framework extraction baseline. The CFPB consumer-suppo
 
 See `docs/architecture.md` and `docs/recipes.md` for the public contracts.
 See `docs/benchmark-smoke-v0.1.md` for the reproducible local benchmark and its limitations.
+See `docs/golden-eval-v0.1-dev.md` for labeled retrieval, citation and safety evaluation.
