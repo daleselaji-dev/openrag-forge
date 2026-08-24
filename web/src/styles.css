@@ -390,14 +390,16 @@ select:focus, input:focus, textarea:focus { outline: 2px solid var(--accent-soft
 .canvas-toolbar {
   flex-shrink: 0;
   display: flex;
+  flex-wrap: wrap; /* 讲解面板打开时画布变窄，工具栏换行而不是把 Recipe 名挤到零宽 */
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 8px 14px;
   padding: 8px 14px;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
 .recipe-identity { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.recipe-identity b { min-width: 8ch; }
 .recipe-identity b { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .recipe-status { font-size: 11px; color: var(--ink-3); white-space: nowrap; }
 .recipe-identity code { font-family: var(--mono); font-size: 11px; color: var(--accent-ink); }
@@ -628,6 +630,14 @@ select:focus, input:focus, textarea:focus { outline: 2px solid var(--accent-soft
 .trace-row details { position: relative; }
 .trace-row details summary { font-size: 11px; color: var(--accent-ink); cursor: pointer; }
 .trace-row details[open] pre { position: absolute; right: 0; z-index: 30; width: 420px; max-width: 60vw; box-shadow: var(--shadow); }
+
+/* 面试讲解打开时中栏变窄：Trace 行改为两行布局，摘要占满整行不再被挤成竖排 */
+.app.interview-on .workspace.interview-open .trace-row {
+  grid-template-columns: 26px minmax(0, 1fr) 60px 92px 110px 44px;
+  grid-template-rows: auto auto;
+  row-gap: 2px;
+}
+.app.interview-on .workspace.interview-open .trace-summary { grid-column: 1 / -1; grid-row: 2; font-size: 11.5px; }
 
 .ingest-summary {
   display: flex;
