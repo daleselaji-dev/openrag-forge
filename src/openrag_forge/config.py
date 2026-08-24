@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     embedding_model: str = "local-embedding-model"
     reranker_model: str = ""
     max_upload_mb: int = 64
+    retrieval_score_threshold: float = 0.5
     trace_persistence: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="OPENRAG_", extra="ignore")
@@ -33,4 +34,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-

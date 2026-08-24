@@ -95,11 +95,14 @@ def _safe_filename(filename: str | None) -> str:
     return value[:180] or "upload.bin"
 
 
+_STOPWORDS = {"a", "an", "the", "is", "are", "was", "were", "what", "which", "how", "can", "could", "should", "i", "you", "we", "they", "for", "to", "of", "in", "on", "and", "or", "does", "do", "did", "this", "that"}
+
+
 def _tokens(text: str) -> set[str]:
     lowered = text.lower()
     words = set(re.findall(r"[a-z0-9][a-z0-9_-]+|[\u4e00-\u9fff]", lowered))
     words.update(re.findall(r"[a-z0-9]+", lowered))
-    return words
+    return {word for word in words if word not in _STOPWORDS}
 
 
 def _topological(recipe: Recipe) -> list[str]:
@@ -462,6 +465,7 @@ async def _execute(request: RunRequest) -> RunResult:
         for node_id in _topological(recipe):
             node = _node(recipe, node_id)
             if node.type in {"dense_retrieve", "sparse_retrieve", "graph_query", "pdf_page_retrieve"}:
+                qdrant_hits = [hit for hit in qdrant_hits if float(hit.get("score", 0.0)) >= settings.retrieval_score_threshold]
                 if qdrant_hits:
                     evidence = [Evidence(citation=f"S{index + 1}", chunk_id=str(hit.get("payload", {}).get("chunk_id", hit.get("id"))), document_id=str(hit.get("payload", {}).get("document_id", "")), title=str(hit.get("payload", {}).get("title", hit.get("payload", {}).get("document_id", ""))), text=str(hit.get("payload", {}).get("text", "")), score=round(float(hit.get("score", 0.0)), 4), metadata=hit.get("payload", {})) for index, hit in enumerate(qdrant_hits[:request.top_k])]
                     backend = "qdrant_dense"
@@ -479,7 +483,10 @@ async def _execute(request: RunRequest) -> RunResult:
                 recorder.record(node_id, "completed", f"处理 {len(evidence)} 条证据", {"evidence_count": len(evidence)})
             elif node.type == "llm_generate":
                 answer, provider = generate_grounded_answer(request.question, evidence, settings)
-                recorder.record(node_id, "completed", "生成受证据约束的回答", {"provider": provider, "citation_count": len(evidence)})
+                if evidence and not re.search(r"\[S\d+\]", answer):
+                    answer = _extractive_answer(request.question, evidence)
+                    provider = "citation_repair_fallback"
+                recorder.record(node_id, "completed", "生成受证据约束的回答", {"provider": provider, "citation_count": len(evidence), "citation_repaired": provider == "citation_repair_fallback"})
             elif node.type == "policy_gate":
                 recorder.record(node_id, "completed", "安全策略通过；未发现外部副作用动作", {"human_review": not bool(evidence)})
             elif node.type == "approval":
@@ -566,6 +573,14 @@ async def get_eval(eval_id: str):
     if not path.exists():
         raise HTTPException(status_code=404, detail="Eval 不存在")
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+@app.get("/api/v1/benchmarks/framework-smoke")
+async def framework_smoke_benchmark():
+    report_path = Path(__file__).resolve().parents[2] / "reports" / "framework_smoke_latest.json"
+    if not report_path.exists():
+        raise HTTPException(status_code=404, detail="尚未运行 framework smoke benchmark")
+    return json.loads(report_path.read_text(encoding="utf-8"))
 
 
 @app.get("/")
