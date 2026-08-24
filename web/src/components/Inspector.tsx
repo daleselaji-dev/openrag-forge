@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import type { CatalogNode, ConfigField, ModelProfile, Recipe, Run, RunMeta, TraceEvent } from '../types'
 import { fmtMs, GROUP_LABELS, shortHash, STATUS_LABELS } from '../format'
 import { EXECUTION_LABELS, IMPLEMENTED_LABELS } from '../teach'
+import { STAGE_LESSONS } from '../interview'
+import InterviewLessonCard from './InterviewLessonCard'
 
 type Props = {
   recipe: Recipe | null
@@ -11,6 +13,7 @@ type Props = {
   run: Run | null
   runMeta: RunMeta | null
   teachOn: boolean
+  interviewOn: boolean
   coachActive: boolean
   dirty: boolean
   onUpdateNodeConfig: (nodeId: string, config: Record<string, unknown>) => void
@@ -89,7 +92,7 @@ function NodeTrace({ events, preview }: { events: TraceEvent[]; preview: boolean
   )
 }
 
-export default function Inspector({ recipe, selectedNodeId, catalog, models, run, runMeta, teachOn, coachActive, dirty, onUpdateNodeConfig, onDeleteNode }: Props) {
+export default function Inspector({ recipe, selectedNodeId, catalog, models, run, runMeta, teachOn, interviewOn, coachActive, dirty, onUpdateNodeConfig, onDeleteNode }: Props) {
   const node = recipe?.nodes.find((item) => item.id === selectedNodeId) || null
   const spec = node ? catalog[node.type] : null
   const [advanced, setAdvanced] = useState(false)
@@ -156,6 +159,12 @@ export default function Inspector({ recipe, selectedNodeId, catalog, models, run
             <p>RAG 不是一根管道而是一张图：检索、融合、生成、安全门各自有类型化端口。编译器在保存时校验端口兼容与无环，保证画布上的结构就是运行时的结构。</p>
           </div>
         )}
+        {interviewOn && (
+          <div className="teach-card">
+            <b>面试讲解 · 从这里开始</b>
+            <p>点击画布任意节点，这里会显示该环节的产品规格级讲解（目的 / 影响 / 旋钮 / 动力 / live vs stub / 面试追问）+ 可改配置。也可以在左侧讲解面板的「环节地图」里点环节，会自动选中对应节点。</p>
+          </div>
+        )}
       </aside>
     )
   }
@@ -186,6 +195,13 @@ export default function Inspector({ recipe, selectedNodeId, catalog, models, run
           {spec.teach.tune && <p><i>怎么调：</i>{spec.teach.tune}</p>}
           {spec.teach.pitfalls && <p><i>常见误区：</i>{spec.teach.pitfalls}</p>}
         </div>
+      )}
+
+      {interviewOn && STAGE_LESSONS[node.type] && (
+        <section className="inspector-section">
+          <h4>面试讲解 · 环节规格</h4>
+          <InterviewLessonCard lesson={STAGE_LESSONS[node.type]} spec={spec} compact />
+        </section>
       )}
 
       <section className="inspector-section">

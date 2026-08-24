@@ -64,8 +64,12 @@ OPENRAG_OTEL_ENABLED=true docker compose --profile observability up -d
 
 `web/` 是全高 Control Room 工作台：左轨切换 装配 / 数据 / 模型 / 场景，中间是 React Flow 画布，右侧节点检查器提供结构化配置表单（字段带 生效 / 不生效 标注，JSON 仅作高级模式），底部 Trace 面板包含 运行 Trace（真实 duration_ms + execution 标注，点击行高亮画布节点）、Ingest Trace 与 回答与证据（安全决策 + Evidence Capsule 下载）。
 
-- 顶栏「辅助教学」开关（localStorage 持久化）：打开后显示分步课程条、节点教学卡与场景 Trace 观察清单；关闭后是干净的生产工作台。
+- 顶栏三态模式切换（localStorage 持久化）：`工作台`（干净控制室）/ `辅助教学`（7 步操作课：怎么用这个工作台）/ `面试讲解`（RAG 设计课，见下）。
 - 诚实标注：目录中尚未实现的节点（稀疏检索 / RRF / 重排等）在画布、检查器与 Trace 里都会标注「占位 / 退化」，Trace 的 `execution` 字段记录每一步真实发生了什么（live / fallback / stub_passthrough）。
+
+### 面试讲解模式（RAG 设计课）
+
+顶栏切到「面试讲解」后，左侧出现可收起的讲解面板（内容在 `web/src/interview/`），五章可导航：**设计历程**（V0 整文入上下文 → V0.1 Naive RAG → 可观察 → 可装配 → 生产横切 → 当前诚实态，每代含业务动机 / 取舍 / 面试追问）、**方案对比**（Naive/Advanced/Modular 范式 + 托管套件 / 开源编排 / 检索中台 / GraphRAG 逐维对比与 PM 结论）、**环节地图**（点击环节即选中画布对应节点，检查器同步显示该环节的规格级讲解 + 可改配置；不在当前 Recipe 的环节可一键加入画布试装）、**核心件深讲**（向量库专章含 8-12 分钟口述提纲，另有 Embedding / Chunk / Rerank / 生成 / Eval 五章）、**实验手册**（改一项配置 → 再跑 → 看 Trace 哪一行变了，含「占位证明」实验）。装配过程全程可定制，讲解跟着节点与 Trace 走；关闭讲解后界面回到干净控制室。
 
 开发：`cd web && npm run dev`（Vite :5173，`/api` 代理到 :18000）；`npm run build` 后 FastAPI 直接伺服 `web/dist`。
 

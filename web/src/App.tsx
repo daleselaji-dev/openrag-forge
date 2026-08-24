@@ -2,12 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, apiWithMeta, postJson } from './api'
 import { shortHash } from './format'
 import { TEACH_STEPS } from './teach'
+import type { LessonAction } from './interview/types'
 import type {
   BottomTab, CatalogNode, DocumentInfo, Health, IngestResult, Message, ModelProfile,
-  RailTab, Recipe, RecipeEdgeDef, Run, RunMeta, Scenario,
+  RailTab, Recipe, RecipeEdgeDef, Run, RunMeta, Scenario, WorkbenchMode,
 } from './types'
 import TopBar from './components/TopBar'
 import TeachStrip from './components/TeachStrip'
+import InterviewPanel from './components/InterviewPanel'
 import RecipeCanvas, { layoutRecipe } from './components/RecipeCanvas'
 import Inspector from './components/Inspector'
 import TracePanel from './components/TracePanel'
@@ -54,19 +56,29 @@ function App() {
   const [railTab, setRailTab] = useState<RailTab>('recipe')
   const [bottomTab, setBottomTab] = useState<BottomTab>('trace')
 
-  const [teachOn, setTeachOn] = useState(() => localStorage.getItem('orf.teach.on') === '1')
+  // 三态模式：work（干净工作台）/ teach（7 步操作课）/ interview（RAG 设计课）。
+  // 兼容旧存储：orf.teach.on=1 且未存过模式时，迁移为 teach。
+  const [mode, setMode] = useState<WorkbenchMode>(() => {
+    const stored = localStorage.getItem('orf.mode') as WorkbenchMode | null
+    if (stored === 'work' || stored === 'teach' || stored === 'interview') return stored
+    return localStorage.getItem('orf.teach.on') === '1' ? 'teach' : 'work'
+  })
+  const teachOn = mode === 'teach'
+  const interviewOn = mode === 'interview'
   const [teachStep, setTeachStep] = useState(() => {
     const stored = Number(localStorage.getItem('orf.teach.step') || 0)
     return Number.isInteger(stored) && stored >= 0 && stored < TEACH_STEPS.length ? stored : 0
   })
   const [teachCollapsed, setTeachCollapsed] = useState(() => localStorage.getItem('orf.teach.collapsed') === '1')
+  const [interviewCollapsed, setInterviewCollapsed] = useState(() => localStorage.getItem('orf.interview.collapsed') === '1')
 
   const requestRef = useRef<AbortController | null>(null)
   const runSeq = useRef(0)
 
-  useEffect(() => { localStorage.setItem('orf.teach.on', teachOn ? '1' : '0') }, [teachOn])
+  useEffect(() => { localStorage.setItem('orf.mode', mode) }, [mode])
   useEffect(() => { localStorage.setItem('orf.teach.step', String(teachStep)) }, [teachStep])
   useEffect(() => { localStorage.setItem('orf.teach.collapsed', teachCollapsed ? '1' : '0') }, [teachCollapsed])
+  useEffect(() => { localStorage.setItem('orf.interview.collapsed', interviewCollapsed ? '1' : '0') }, [interviewCollapsed])
 
   const selectRecipe = (recipeId: string, list?: Recipe[]) => {
     const pool = list || recipes
@@ -139,15 +151,17 @@ function App() {
     applyRecipeChange((recipe) => ({ ...recipe, nodes: recipe.nodes.map((node) => (node.id === nodeId ? { ...node, config } : node)) }))
   }
 
-  const addPaletteNode = () => {
-    if (!workingRecipe) return
-    const id = `${paletteType}_${Date.now().toString(36)}`
+  const addNodeOfType = (nodeType: string) => {
+    if (!workingRecipe || !catalog[nodeType]) return
+    const id = `${nodeType}_${Date.now().toString(36)}`
     const maxX = Math.max(0, ...Object.values(positions).map((position) => position.x))
     setPositions((current) => ({ ...current, [id]: { x: maxX + 250, y: 40 } }))
-    applyRecipeChange((recipe) => ({ ...recipe, nodes: [...recipe.nodes, { id, type: paletteType, config: {} }] }))
+    applyRecipeChange((recipe) => ({ ...recipe, nodes: [...recipe.nodes, { id, type: nodeType, config: {} }] }))
     setSelectedNodeId(id)
-    setMessage({ text: `已加入「${catalog[paletteType]?.title || paletteType}」。从端口拖线连接，编译器会拒绝类型不兼容的连线。`, tone: 'info' })
+    setMessage({ text: `已加入「${catalog[nodeType]?.title || nodeType}」。从端口拖线连接，编译器会拒绝类型不兼容的连线。`, tone: 'info' })
   }
+
+  const addPaletteNode = () => addNodeOfType(paletteType)
 
   const connectEdge = (edge: RecipeEdgeDef) => {
     if (!workingRecipe) return
@@ -368,6 +382,22 @@ function App() {
     }
   }
 
+  // ---- 面试讲解：内容里的工作台动作（加载 Recipe / 切页签 / 预填问题） ----
+
+  const runLessonAction = (action: LessonAction) => {
+    if (action.recipeId) {
+      if (recipes.some((item) => item.recipe_id === action.recipeId)) {
+        selectRecipe(action.recipeId)
+        setRailTab('recipe')
+      } else {
+        setMessage({ text: `未找到 Recipe「${action.recipeId}」。`, tone: 'err' })
+      }
+    }
+    if (action.question) setQuestion(action.question)
+    if (action.railTab) setRailTab(action.railTab)
+    if (action.bottomTab) setBottomTab(action.bottomTab)
+  }
+
   // ---- 教学 coach 高亮 ----
 
   const coachTarget = teachOn && !teachCollapsed ? TEACH_STEPS[teachStep]?.coachTarget : undefined
@@ -392,8 +422,8 @@ function App() {
   )
 
   return (
-    <div className={`app${teachOn ? ' teach-on' : ''}`}>
-      <TopBar health={health} teachOn={teachOn} onToggleTeach={() => setTeachOn((current) => !current)} onRefresh={() => void load()} />
+    <div className={`app${teachOn ? ' teach-on' : ''}${interviewOn ? ' interview-on' : ''}`}>
+      <TopBar health={health} mode={mode} onSetMode={setMode} onRefresh={() => void load()} />
       {teachOn && (
         <TeachStrip
           stepIndex={teachStep}
@@ -403,7 +433,18 @@ function App() {
           onGo={(rail, bottom) => { if (rail) setRailTab(rail); if (bottom) setBottomTab(bottom) }}
         />
       )}
-      <div className="workspace">
+      <div className={`workspace${interviewOn ? (interviewCollapsed ? ' interview-collapsed' : ' interview-open') : ''}`}>
+        {interviewOn && (
+          <InterviewPanel
+            catalog={catalog}
+            recipe={workingRecipe}
+            collapsed={interviewCollapsed}
+            onToggleCollapsed={() => setInterviewCollapsed((current) => !current)}
+            onSelectNode={setSelectedNodeId}
+            onAddNode={addNodeOfType}
+            onAction={runLessonAction}
+          />
+        )}
         <nav className="rail-tabs">
           {RAIL_TABS.map((tab) => (
             <button key={tab.id} className={`rail-tab${railTab === tab.id ? ' active' : ''}${coachTarget === tab.coach ? ' coach-pulse' : ''}`} onClick={() => setRailTab(tab.id)}>
@@ -482,6 +523,7 @@ function App() {
           run={run}
           runMeta={runMeta}
           teachOn={teachOn}
+          interviewOn={interviewOn}
           coachActive={coachTarget === 'inspector'}
           dirty={dirty}
           onUpdateNodeConfig={updateNodeConfig}

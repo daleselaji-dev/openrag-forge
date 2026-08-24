@@ -672,11 +672,257 @@ select:focus, input:focus, textarea:focus { outline: 2px solid var(--accent-soft
 .safety-chip.preview { background: var(--preview-soft); color: var(--preview); }
 .download { font-size: 11px; color: var(--accent-ink); margin-left: auto; }
 
+/* ---------- 顶栏模式切换（工作台 / 辅助教学 / 面试讲解） ---------- */
+
+.mode-switch {
+  display: flex;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--panel-2);
+  padding: 2px;
+  gap: 2px;
+}
+.mode-switch-btn {
+  border: none;
+  background: transparent;
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.mode-switch-btn:hover { color: var(--ink); }
+.mode-switch-btn.active { background: var(--ink); color: var(--panel); font-weight: 700; }
+.mode-switch-btn.interview.active { background: var(--accent); }
+
+/* ---------- 面试讲解面板 ---------- */
+
+.workspace.interview-open { grid-template-columns: minmax(360px, 26vw) 52px 280px minmax(0, 1fr) 330px; }
+.workspace.interview-collapsed { grid-template-columns: 42px 52px 316px minmax(0, 1fr) 340px; }
+
+.interview-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--panel);
+  border-right: 1px solid var(--line-strong);
+}
+.interview-panel.collapsed { align-items: stretch; }
+.iv-reopen {
+  flex: 1;
+  border: none;
+  background: linear-gradient(180deg, #f6f2ff 0%, #efeafc 100%);
+  color: var(--accent-ink);
+  font-weight: 700;
+  font-size: 12px;
+  writing-mode: vertical-rl;
+  letter-spacing: 0.2em;
+  cursor: pointer;
+}
+.iv-reopen:hover { background: var(--accent-soft); }
+
+.iv-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px 8px;
+  background: linear-gradient(180deg, #f6f2ff 0%, #f3effd 100%);
+  border-bottom: 1px solid #cfc4f2;
+}
+.iv-head-note { margin: 4px 0 0; font-size: 11px; color: #55507a; max-width: 44ch; }
+
+.iv-tabs { display: flex; gap: 2px; padding: 6px 10px 0; border-bottom: 1px solid var(--line); background: var(--panel-2); overflow-x: auto; }
+.iv-tab {
+  border: none;
+  background: none;
+  border-bottom: 2px solid transparent;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.iv-tab.active { color: var(--ink); border-bottom-color: var(--accent); font-weight: 700; }
+
+.iv-body { flex: 1; overflow-y: auto; min-height: 0; padding: 12px 14px 24px; }
+.iv-chapter p { font-size: 12.5px; line-height: 1.7; color: var(--ink-2); margin: 6px 0; }
+.iv-chapter ul, .iv-chapter ol { margin: 4px 0; padding-left: 18px; font-size: 12.5px; line-height: 1.65; color: var(--ink-2); }
+.iv-chapter li { margin: 3px 0; }
+.iv-intro { color: var(--ink-2); }
+.iv-section-title { margin: 18px 0 6px; font-size: 13.5px; color: var(--ink); border-left: 3px solid var(--accent); padding-left: 8px; }
+
+/* 历程时间线 */
+.iv-timeline { display: grid; gap: 14px; margin-top: 10px; }
+.iv-gen {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 10px;
+  background: var(--panel-2);
+  padding: 12px 14px;
+}
+.iv-gen-head h4 { margin: 0; font-size: 14.5px; }
+.iv-tagline { color: var(--accent-ink) !important; font-weight: 600; margin-top: 3px !important; }
+.iv-why-next { background: var(--accent-soft); border-radius: 8px; padding: 8px 10px; }
+.iv-why-next h5 { color: var(--accent-ink); }
+
+.iv-block { margin-top: 10px; }
+.iv-block h5 { margin: 0 0 4px; font-size: 11px; letter-spacing: 0.06em; color: var(--ink-3); text-transform: none; }
+.iv-block p { margin: 3px 0; }
+
+.iv-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+/* 方案对比 */
+.iv-card {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-2);
+  padding: 10px 12px;
+  margin: 8px 0;
+}
+.iv-card h5 { margin: 0 0 4px; font-size: 13px; }
+.iv-pipeline { font-size: 11px !important; color: var(--ink-3) !important; }
+.iv-kv { margin: 7px 0; }
+.iv-kv small { display: block; font-size: 10px; letter-spacing: 0.05em; color: var(--accent-ink); font-weight: 700; }
+.iv-kv p, .iv-kv ul, .iv-kv ol { margin: 2px 0 0; }
+.iv-stance p { background: var(--warn-soft); border-radius: 6px; padding: 6px 8px; }
+.iv-entry {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  padding: 9px 12px;
+  margin: 8px 0;
+}
+.iv-entry summary { cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+.iv-entry summary b { font-size: 13px; }
+.iv-when { font-size: 11px; color: var(--ink-3); }
+.iv-pros-cons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 7px 0; }
+.iv-pros-cons small { display: block; font-size: 10px; color: var(--accent-ink); font-weight: 700; }
+.iv-conclusion {
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-top: 16px;
+}
+.iv-conclusion h4 { margin: 0 0 6px; font-size: 13.5px; color: var(--accent-ink); }
+
+/* 环节地图 */
+.iv-lane { margin-bottom: 4px; }
+.iv-stage-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.iv-stage-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  border-radius: 999px;
+  padding: 5px 11px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.iv-stage-chip:hover { border-color: var(--accent); color: var(--ink); }
+.iv-stage-chip.in-recipe { border-style: solid; background: var(--panel-2); font-weight: 600; color: var(--ink); }
+.iv-stage-chip:not(.in-recipe) { border-style: dashed; }
+.iv-stage-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.iv-chip-flag { font-style: normal; font-size: 9px; border-radius: 999px; padding: 0 6px; }
+.iv-chip-flag.stub { background: var(--stub-soft); color: var(--stub); }
+.iv-chip-flag.fallback { background: var(--warn-soft); color: var(--warn); }
+.iv-chip-flag.system { background: var(--preview-soft); color: var(--preview); }
+.iv-stage-chip.active .iv-chip-flag { background: rgba(255, 255, 255, 0.25); color: #fff; }
+.iv-stage-detail { margin-top: 14px; border-top: 1px solid var(--line-strong); padding-top: 10px; }
+.iv-stage-hint { font-size: 12px; color: var(--ink-2); background: var(--panel-3); border-radius: 7px; padding: 7px 10px; }
+.iv-stage-hint.ok { background: var(--live-soft); color: var(--live); }
+
+/* 讲解卡（检查器与环节地图共用） */
+.iv-lesson { font-size: 12.5px; }
+.iv-lesson-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.iv-lesson-head b { font-size: 14px; }
+.iv-lane-chip { font-size: 9px; letter-spacing: 0.08em; border-radius: 999px; padding: 2px 8px; background: var(--panel-3); color: var(--ink-3); }
+.iv-purpose { margin: 6px 0; color: var(--ink); line-height: 1.65; }
+.iv-impact-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.iv-impact-grid > div { background: var(--panel-2); border-radius: 7px; padding: 7px 9px; }
+.iv-impact-grid small { display: block; font-size: 10px; color: var(--accent-ink); font-weight: 700; }
+.iv-impact-grid p { margin: 2px 0 0; font-size: 12px; line-height: 1.55; color: var(--ink-2); }
+.iv-lesson.compact .iv-impact-grid { grid-template-columns: 1fr; }
+.iv-knobs { list-style: none; padding: 0 !important; margin: 0 !important; }
+.iv-knobs li { display: block; margin: 5px 0 !important; line-height: 1.55; color: var(--ink-2); }
+.iv-knob-chip {
+  display: inline-block;
+  font-size: 9px;
+  border-radius: 999px;
+  padding: 1px 7px;
+  margin-right: 6px;
+  background: var(--live-soft);
+  color: var(--live);
+}
+.iv-knob-chip.off { background: var(--stub-soft); color: var(--stub); border: 1px dashed var(--stub); }
+.iv-dynamics p { margin: 3px 0; color: var(--ink-2); }
+.iv-dyn-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
+.iv-lesson.compact .iv-dyn-pair { grid-template-columns: 1fr; }
+.iv-dyn-pair > div { background: var(--panel-2); border-radius: 7px; padding: 7px 9px; }
+.iv-dyn-pair small { display: block; font-size: 10px; color: var(--warn); font-weight: 700; }
+.iv-dyn-pair p { margin: 2px 0 0; font-size: 12px; }
+.iv-live-status p {
+  background: var(--warn-soft);
+  border: 1px dashed var(--warn);
+  border-radius: 7px;
+  padding: 7px 10px;
+  color: var(--ink-2);
+  margin: 2px 0;
+}
+.iv-qa {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  padding: 7px 10px;
+  margin: 6px 0;
+}
+.iv-qa summary { cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--accent-ink); }
+.iv-qa p { margin: 6px 0 0; color: var(--ink-2); line-height: 1.65; }
+
+/* 深讲章 */
+.iv-subtabs { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+.iv-subtab {
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  border-radius: 999px;
+  padding: 4px 11px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.iv-subtab.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.iv-dd-title { margin: 4px 0 6px; font-size: 15px; }
+.iv-dd-section { margin-bottom: 8px; }
+.iv-table-wrap { overflow-x: auto; margin: 8px 0; }
+.iv-table { border-collapse: collapse; width: 100%; font-size: 11.5px; }
+.iv-table th, .iv-table td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; line-height: 1.5; }
+.iv-table th { background: var(--panel-3); font-size: 10.5px; letter-spacing: 0.04em; }
+.iv-table td:first-child { font-weight: 700; white-space: nowrap; }
+.iv-talktrack { display: grid; gap: 8px; }
+.iv-talk-seg { border-left: 3px solid var(--accent); background: var(--panel-2); border-radius: 0 8px 8px 0; padding: 8px 12px; }
+.iv-talk-seg b { font-size: 12px; color: var(--accent-ink); }
+.iv-talk-seg ul { margin: 4px 0 0; }
+
+/* 实验手册 */
+.iv-exp h5 { font-size: 13.5px; }
+.iv-exp-change { background: var(--accent-soft); border-radius: 6px; padding: 6px 9px; }
+.iv-honest {
+  background: var(--warn-soft);
+  border: 1px dashed var(--warn);
+  border-radius: 7px;
+  padding: 6px 9px;
+  font-size: 12px !important;
+}
+
 /* ---------- 窄屏降级：不追求完美，但不能崩 ---------- */
 
 @media (max-width: 1180px) {
   .app { height: auto; min-height: 100vh; }
   .workspace { display: flex; flex-direction: column; }
+  .interview-panel { border-right: none; border-bottom: 1px solid var(--line-strong); max-height: 60vh; }
+  .interview-panel.collapsed { max-height: none; }
+  .iv-reopen { writing-mode: horizontal-tb; padding: 10px; letter-spacing: 0.1em; }
+  .mode-switch-btn { padding: 5px 8px; font-size: 11px; }
   .rail-tabs { flex-direction: row; border-right: none; border-bottom: 1px solid var(--line); padding: 8px 12px; }
   .rail-tab { width: auto; height: auto; padding: 6px 14px; letter-spacing: 0.1em; }
   .rail-body { border-right: none; border-bottom: 1px solid var(--line); max-height: 420px; }

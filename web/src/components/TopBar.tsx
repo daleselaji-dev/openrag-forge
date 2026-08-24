@@ -1,13 +1,19 @@
-import type { Health } from '../types'
+import type { Health, WorkbenchMode } from '../types'
 
 type Props = {
   health: Health | null
-  teachOn: boolean
-  onToggleTeach: () => void
+  mode: WorkbenchMode
+  onSetMode: (mode: WorkbenchMode) => void
   onRefresh: () => void
 }
 
-export default function TopBar({ health, teachOn, onToggleTeach, onRefresh }: Props) {
+const MODES: { id: WorkbenchMode; label: string; title: string }[] = [
+  { id: 'work', label: '工作台', title: '干净的 Control Room：无教学与讲解噪声' },
+  { id: 'teach', label: '辅助教学', title: '7 步操作课：怎么用这个工作台' },
+  { id: 'interview', label: '面试讲解', title: 'RAG 设计课：历程 / 方案对比 / 环节地图 / 向量库专章 / 实验手册' },
+]
+
+export default function TopBar({ health, mode, onSetMode, onRefresh }: Props) {
   const warnings = health?.production_readiness?.warnings || []
   return (
     <header className="topbar">
@@ -45,10 +51,20 @@ export default function TopBar({ health, teachOn, onToggleTeach, onRefresh }: Pr
       </div>
       <div className="topbar-actions">
         <button className="ghost small" onClick={onRefresh}>刷新状态</button>
-        <button className={`teach-toggle${teachOn ? ' on' : ''}`} onClick={onToggleTeach} aria-pressed={teachOn}>
-          <i />
-          辅助教学 {teachOn ? '开' : '关'}
-        </button>
+        <div className="mode-switch" role="tablist" aria-label="工作台模式">
+          {MODES.map((item) => (
+            <button
+              key={item.id}
+              role="tab"
+              aria-selected={mode === item.id}
+              className={`mode-switch-btn${mode === item.id ? ' active' : ''}${item.id === 'interview' ? ' interview' : ''}`}
+              title={item.title}
+              onClick={() => onSetMode(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
       </div>
     </header>
   )

@@ -143,4 +143,7 @@ export type IngestResult = {
 export type RailTab = 'recipe' | 'data' | 'model' | 'scenario'
 export type BottomTab = 'trace' | 'ingest' | 'result'
 
+/** 顶栏三态模式：干净工作台 / 辅助教学（7 步操作课） / 面试讲解（RAG 设计课） */
+export type WorkbenchMode = 'work' | 'teach' | 'interview'
+
 export type Message = { text: string; tone: 'info' | 'ok' | 'err' }
