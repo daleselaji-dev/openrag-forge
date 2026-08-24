@@ -48,6 +48,10 @@ class Store:
                   recipe_id TEXT PRIMARY KEY, payload TEXT NOT NULL,
                   created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS model_registry (
+                  model_id TEXT PRIMARY KEY, payload TEXT NOT NULL,
+                  created_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS runs (
                   run_id TEXT PRIMARY KEY, payload TEXT NOT NULL,
                   created_at TEXT NOT NULL
@@ -120,6 +124,20 @@ class Store:
         with self._connect() as db:
             rows = db.execute("SELECT payload FROM recipes ORDER BY created_at").fetchall()
         return [Recipe.model_validate_json(row["payload"]) for row in rows]
+
+    def save_model(self, model_id: str, payload: dict[str, Any]) -> None:
+        with self._connect() as db:
+            db.execute("INSERT OR REPLACE INTO model_registry VALUES (?, ?, ?)", (model_id, json.dumps(payload, ensure_ascii=False), utc_now()))
+
+    def get_model(self, model_id: str) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute("SELECT payload FROM model_registry WHERE model_id=?", (model_id,)).fetchone()
+        return json.loads(row["payload"]) if row else None
+
+    def list_models(self) -> list[dict[str, Any]]:
+        with self._connect() as db:
+            rows = db.execute("SELECT payload FROM model_registry ORDER BY created_at").fetchall()
+        return [json.loads(row["payload"]) for row in rows]
 
     def save_run(self, payload: dict[str, Any]) -> None:
         with self._connect() as db:

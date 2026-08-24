@@ -7,7 +7,7 @@ import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 import httpx
@@ -57,6 +57,17 @@ class EvalRequest(BaseModel):
     knowledge_base_id: str = "default"
     recipe_id: str = "v0_1_dense"
     cases: list[EvalCase] = Field(min_length=1, max_length=500)
+
+
+class ModelRegistration(BaseModel):
+    model_id: str = Field(min_length=1, max_length=120)
+    display_name: str = Field(min_length=1, max_length=160)
+    kind: Literal["chat", "embedding", "reranker"]
+    provider: str = "openai-compatible"
+    base_url: str = Field(min_length=1, max_length=500)
+    model_name: str = Field(min_length=1, max_length=240)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    source: Literal["endpoint", "manifest"] = "endpoint"
 
 
 def _safe_filename(filename: str | None) -> str:
@@ -146,6 +157,15 @@ async def lifespan(app: FastAPI):
         if store.get_recipe(recipe.recipe_id) is None:
             store.save_recipe(recipe.model_copy(update={"status": "published"}))
     store.save_knowledge_base("default", "Default knowledge base")
+    configured_models = [
+        ModelRegistration(model_id="configured-chat", display_name=settings.chat_model, kind="chat", base_url=settings.chat_base_url, model_name=settings.chat_model).model_dump(),
+        ModelRegistration(model_id="configured-embedding", display_name=settings.embedding_model, kind="embedding", base_url=settings.embedding_base_url, model_name=settings.embedding_model).model_dump(),
+    ]
+    if settings.reranker_model and settings.reranker_base_url:
+        configured_models.append(ModelRegistration(model_id="configured-reranker", display_name=settings.reranker_model, kind="reranker", base_url=settings.reranker_base_url, model_name=settings.reranker_model).model_dump())
+    for model in configured_models:
+        if store.get_model(model["model_id"]) is None:
+            store.save_model(model["model_id"], model)
     app.state.store = store
     app.state.qdrant = QdrantAdapter(settings)
     yield
@@ -274,6 +294,36 @@ async def plugins():
     return {"nodes": node_catalog(), "parsers": ["native_text", "html_structure", "pdf_page_text", "pdf_layout", "office_structure", "tabular", "json_structure"]}
 
 
+@app.get("/api/v1/models")
+async def list_models():
+    return {"items": app.state.store.list_models(), "import_policy": "Register an OpenAI-compatible endpoint or a JSON manifest; model weight files stay in LM Studio/Ollama/vLLM and are never executed by the web app."}
+
+
+@app.post("/api/v1/models")
+async def register_model(model: ModelRegistration):
+    app.state.store.save_model(model.model_id, model.model_dump())
+    return {"status": "registered", "model": model}
+
+
+@app.post("/api/v1/models/{model_id}/probe")
+async def probe_model(model_id: str):
+    model = app.state.store.get_model(model_id)
+    if model is None:
+        raise HTTPException(status_code=404, detail="模型未注册")
+    base_url = str(model["base_url"]).rstrip("/")
+    try:
+        if model["kind"] == "embedding":
+            response = httpx.post(f"{base_url}/embeddings", json={"model": model["model_name"], "input": ["OpenRAG Forge probe"]}, timeout=30)
+        elif model["kind"] == "chat":
+            response = httpx.get(f"{base_url}/models", timeout=10)
+        else:
+            response = httpx.get(f"{base_url}/models", timeout=10)
+        response.raise_for_status()
+        return {"status": "ready", "model_id": model_id, "kind": model["kind"], "details": {"http_status": response.status_code, "base_url": base_url}}
+    except Exception as exc:
+        return {"status": "unreachable", "model_id": model_id, "kind": model["kind"], "details": {"error": str(exc), "base_url": base_url}}
+
+
 @app.get("/api/v1/recipes")
 async def list_recipes():
     recipes = app.state.store.list_recipes()
@@ -287,8 +337,16 @@ async def create_recipe(recipe: Recipe):
         compiled = compile_recipe(recipe)
     except CompileError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    app.state.store.save_recipe(compiled)
-    return compiled
+    saved = compiled.model_copy(update={"status": "draft" if recipe.status == "draft" else compiled.status})
+    app.state.store.save_recipe(saved)
+    return saved
+
+
+@app.put("/api/v1/recipes/{recipe_id}")
+async def update_recipe(recipe_id: str, recipe: Recipe):
+    if recipe.recipe_id != recipe_id:
+        raise HTTPException(status_code=422, detail="路径 recipe_id 与请求体不一致")
+    return await create_recipe(recipe)
 
 
 @app.post("/api/v1/recipes/{recipe_id}/validate")
