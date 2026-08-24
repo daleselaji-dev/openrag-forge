@@ -121,7 +121,7 @@ def default_recipes() -> list[Recipe]:
         Recipe(recipe_id="v1_controlled_agent", name="V1 Controlled Agent", version="1.0.0", nodes=[RecipeNode(id="q", type="question"), RecipeNode(id="d", type="dense_retrieve"), RecipeNode(id="draft", type="build_ticket_draft"), RecipeNode(id="approval", type="approval")], edges=[RecipeEdge(source="q", source_port="query", target="d", target_port="query"), RecipeEdge(source="q", source_port="query", target="draft", target_port="query"), RecipeEdge(source="d", source_port="candidates", target="draft", target_port="candidates"), RecipeEdge(source="draft", source_port="artifact", target="approval", target_port="artifact")]),
     ]
     hybrid = next(recipe for recipe in recipes if recipe.recipe_id == "v0_2_hybrid")
-    def hybrid_variant(recipe_id: str, name: str, extra_nodes: list[RecipeNode], extra_edges: list[RecipeEdge], remove_edges: set[tuple[str, str, str, str]] = set()) -> Recipe:
+    def hybrid_variant(recipe_id: str, name: str, extra_nodes: list[RecipeNode], extra_edges: list[RecipeEdge], remove_edges: frozenset[tuple[str, str, str, str]] = frozenset()) -> Recipe:
         edges = [edge for edge in hybrid.edges if (edge.source, edge.source_port, edge.target, edge.target_port) not in remove_edges]
         match = re.match(r"v(\d+)_(\d+)", recipe_id)
         version = f"{match.group(1)}.{match.group(2)}.0" if match else "0.1.0"
