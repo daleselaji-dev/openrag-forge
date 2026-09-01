@@ -119,6 +119,11 @@ OPENRAG_OTEL_ENABLED=true docker compose --profile observability up -d
 - **安全**：可选 API key 认证（常数时间比较）、可配置 CORS、限流兜底、安全响应头、非 root 容器；
 - **配置管理**：全部走 `OPENRAG_*` 环境变量，`environment=production` 时自动输出生产就绪告警（`/api/v1/health` 的 `production_readiness` 字段）。
 
+- **Langfuse（可选）**：通过 Langfuse v4 的 OTLP endpoint 接收同一批节点/Embedding/LLM spans，
+  顶栏显示健康状态，prompt/completion 默认不采集；本地调试可显式开启 `OPENRAG_LANGFUSE_CAPTURE_CONTENT=true`。
+  Langfuse 用于 Trace、切片和 Score，Recall/MRR/Citation 等发布门禁仍由本地 Golden Eval 计算。
+  具体配置与分数同步命令见 [`docs/observability.md`](docs/observability.md)。
+
 | 文档 | 内容 |
 |---|---|
 | `docs/configuration.md` | 每个配置项在哪里改、生产建议值 |
