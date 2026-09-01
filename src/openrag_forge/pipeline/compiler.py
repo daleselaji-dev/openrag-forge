@@ -44,6 +44,86 @@ NODE_CATALOG: dict[str, dict[str, Any]] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# 节点目录元数据（供工作台展示与教学）。
+# implemented 字段是「诚实标注」的核心约定：
+#   live     —— 节点声明的算法在当前代码里真实执行；
+#   fallback —— 节点存在，但执行时退化为共享路径（如稀疏检索共用稠密结果）；
+#   stub     —— 仅在 Trace 中记录经过，不改变任何数据（占位直通）。
+# 工作台必须原样展示这些标注，禁止把 stub 呈现成已实现。
+# ---------------------------------------------------------------------------
+
+NODE_META: dict[str, dict[str, Any]] = {
+    "parse_route": {"title": "解析路由", "implemented": "live", "execution_note": "根据文件签名与扩展名选择真实解析器，决策带置信度与 reason_codes。", "teach": {"what": "上传的原始字节先经过路由：识别 PDF/Office/HTML/表格/纯文本，选出对应解析器。这是 RAG 数据面质量的第一道闸门。", "tune": "route=auto 让签名检测做决定；解析结果不对时可强制指定路由后 reprocess。", "pitfalls": "把扫描版 PDF 当纯文本解析会得到空 Block；路由错误应看 reason_codes 而不是直接换模型。"}},
+    "native_parser": {"title": "文本解析", "implemented": "live", "execution_note": "由 parse_route 路由到达时真实执行（Markdown/纯文本 → 结构化 Block）。", "teach": {"what": "把 Markdown / 纯文本按标题层级切成 Block，保留 heading_path。", "tune": "无参数；质量取决于原文结构是否清晰。", "pitfalls": "没有标题结构的长文本会变成大段 paragraph，后续 Chunk 边界会比较生硬。"}},
+    "pdf_parser": {"title": "PDF 解析", "implemented": "live", "execution_note": "按页提取文本；不做版面分析（layout 路由为轻量近似）。", "teach": {"what": "按页读取 PDF 文本层，每页一个 Block 并记录页码。", "tune": "扫描件（无文本层）需要 OCR，本框架未内置。", "pitfalls": "双栏排版按行拼接可能乱序；表格会被拍平成文本。"}},
+    "office_parser": {"title": "Office 解析", "implemented": "live", "execution_note": "DOCX/XLSX 结构化提取真实执行。", "teach": {"what": "从 Office XML 提取段落与表格行。", "tune": "无参数。", "pitfalls": "嵌入图片/图表内容不会被提取。"}},
+    "tabular_parser": {"title": "表格解析", "implemented": "live", "execution_note": "CSV/XLSX 每行生成 row Block，真实执行。", "teach": {"what": "把表格行转成带表头上下文的文本 Block，便于按行检索。", "tune": "无参数。", "pitfalls": "超宽表每行文本很长，注意 Chunk 大小配合。"}},
+    "chunker": {"title": "Chunker", "implemented": "live", "execution_note": "按 max_chars/overlap 滑窗切分，配置在上传时真实生效。", "teach": {"what": "把 Block 切成检索粒度的 Chunk。Chunk 是检索与引用的最小单位。", "tune": "max_chars 越小召回越精确但上下文越碎；overlap 用于缓解切断句子的伤害。改完在「数据」页重新上传或 reprocess 才会生效。", "pitfalls": "常见误区：无限加大 chunk 提升『上下文』——会稀释向量语义，召回反而变差。"}},
+    "metadata_enricher": {"title": "Metadata", "implemented": "live", "execution_note": "保存 heading_path/页码等基础 metadata；没有 LLM 增强。", "teach": {"what": "把标题路径、页码、block 类型等写入 Chunk metadata，供过滤与引用定位。", "tune": "无参数；进阶做法是用 LLM 生成摘要/标签（本框架未实现）。", "pitfalls": "metadata 缺失时 metadata_filter 类节点无从过滤。"}},
+    "embed_index": {"title": "Embedding / 索引", "implemented": "live", "execution_note": "调用 OpenAI 兼容 Embedding 端点并写入 Qdrant；服务不可用时降级 deferred（真相源不受影响）。", "teach": {"what": "把 Chunk 向量化写入 Qdrant。Qdrant 是可重建的派生索引，SQLite 才是真相源。", "tune": "model_ref 绑定注册过的 Embedding 模型；换模型后必须重建索引，否则新旧向量不可比。", "pitfalls": "索引 deferred ≠ 失败：文档已保存，模型服务就绪后用「重建索引」补齐。"}},
+    "question": {"title": "问题", "implemented": "live", "execution_note": "查询入口，透传问题文本。", "teach": {"what": "查询链路的入口节点，携带用户问题。", "tune": "无参数。", "pitfalls": "问题里含高风险措辞会触发安全门直接拒答（这是设计行为）。"}},
+    "intent_router": {"title": "意图路由", "implemented": "stub", "execution_note": "占位直通：未实现意图分类，仅在 Trace 中记录经过。", "teach": {"what": "设计目标：按问题意图选择不同检索分支（闲聊/事实/操作类）。当前为占位。", "tune": "当前配置不生效。", "pitfalls": "不要以为加了这个节点就有意图识别——看 Trace 里的 stub_passthrough 标记。"}},
+    "metadata_filter": {"title": "Metadata 过滤", "implemented": "stub", "execution_note": "占位直通：过滤条件不会真正作用于候选集。", "teach": {"what": "设计目标：按版本/生效日期等 metadata 缩小检索范围（政策问答刚需）。当前为占位。", "tune": "当前配置不生效。", "pitfalls": "生产政策库没有版本过滤会混用过期政策——这正是该节点尚未实现前不宜接真实合规场景的原因。"}},
+    "dense_retrieve": {"title": "稠密检索", "implemented": "live", "execution_note": "真实执行：优先 Qdrant 向量检索；Qdrant/Embedding 不可用时降级为词法重叠检索（Trace 标 fallback）。", "teach": {"what": "把问题向量化后在 Qdrant 里找最近邻 Chunk，是这条链路真正的召回主力。", "tune": "top_k 控制候选条数（本节点配置优先于请求参数）；score_threshold 过滤低分噪声。", "pitfalls": "threshold 设太高会把全部候选滤光，退化成『没有证据』；看 Trace 里 backend 字段确认走的是 qdrant_dense 还是 lexical_fallback。"}},
+    "sparse_retrieve": {"title": "稀疏检索 / BM25", "implemented": "fallback", "execution_note": "未实现真实稀疏索引：执行时共享稠密/词法检索结果，Trace 会如实标注。", "teach": {"what": "设计目标：BM25/命名稀疏向量做关键词召回，与稠密检索互补。当前没有独立稀疏索引。", "tune": "top_k 会被记录但不产生独立候选集。", "pitfalls": "画布上出现本节点 ≠ 已有混合检索——请看 execution 标记。"}},
+    "rrf_fusion": {"title": "RRF 融合", "implemented": "stub", "execution_note": "占位直通：没有第二路候选可融合，证据顺序不变。", "teach": {"what": "设计目标：Reciprocal Rank Fusion 合并多路召回。依赖真实的稀疏检索先落地。", "tune": "k 参数当前不生效。", "pitfalls": "融合节点在只有一路候选时是空转——这正是当前状态。"}},
+    "reranker": {"title": "重排", "implemented": "stub", "execution_note": "占位直通：未调用 Cross-Encoder，证据顺序保持召回顺序。", "teach": {"what": "设计目标：用 Cross-Encoder 对 candidate_k 条候选精排出 final_k 条证据，通常是精度提升最大的一步。", "tune": "model_ref/candidate_k/final_k 当前不生效。", "pitfalls": "v0_4_rerank 目前与 v0_2_hybrid 的实际执行路径几乎相同——选型对比时别被目录名误导。"}},
+    "context_builder": {"title": "上下文构建", "implemented": "stub", "execution_note": "占位直通：未做 token 预算裁剪与 MMR 去重，证据原样进入生成。", "teach": {"what": "设计目标：按 token 预算挑选、去重、排序证据，拼装进 Prompt。当前证据直接透传。", "tune": "token_budget/mmr_lambda 当前不生效。", "pitfalls": "证据条数过多时 Prompt 会超长——当前靠 top_k 控制，而不是这里。"}},
+    "parent_expansion": {"title": "父块扩展", "implemented": "stub", "execution_note": "占位直通：未实现父子块扩展。", "teach": {"what": "设计目标：命中小 Chunk 后回捞其父级 Block 补全上下文。", "tune": "当前配置不生效。", "pitfalls": "无。"}},
+    "llm_generate": {"title": "LLM 生成", "implemented": "live", "execution_note": "真实调用 OpenAI 兼容 Chat 端点；不可用时降级为证据摘要（extractive_fallback），缺引用时触发 citation_repair。", "teach": {"what": "用检索证据约束生成回答，要求每个事实引用 [S#]。", "tune": "model_ref 绑定注册的 Chat 模型，temperature/max_tokens 真实生效。", "pitfalls": "看 Trace 的 provider 字段：extractive_fallback 说明模型端点没接通，回答只是证据摘要。"}},
+    "evidence_grade": {"title": "证据评分", "implemented": "stub", "execution_note": "占位直通：未实现证据充分性评分。", "teach": {"what": "设计目标：判断证据是否足以回答，不足则触发纠错检索。", "tune": "当前配置不生效。", "pitfalls": "无。"}},
+    "policy_gate": {"title": "安全门", "implemented": "live", "execution_note": "真实执行，但仅是关键词正则风险检测 + 无副作用检查，不是完整内容安全系统。", "teach": {"what": "拦截高风险请求（退款承诺/违法认定等），并声明本次运行无外部副作用。", "tune": "风险词表在 policies/basic.py，按业务扩展。", "pitfalls": "正则门挡不住改写攻击；接真实客户前需要独立的内容安全服务。"}},
+    "bounded_corrective": {"title": "有限纠错", "implemented": "stub", "execution_note": "占位直通：未实现重写查询与二次检索。", "teach": {"what": "设计目标：证据不足时改写查询重试一次（有界，防止死循环）。编译器强制纠错必须用本节点声明。", "tune": "max_retries 当前不生效。", "pitfalls": "无界的『自我纠错循环』是 RAG 生产事故常客，所以编译器直接拒绝环。"}},
+    "graph_query": {"title": "图谱查询", "implemented": "fallback", "execution_note": "未接图数据库：执行时共享稠密/词法检索结果。", "teach": {"what": "设计目标：从知识图谱召回实体关系证据。需要 graph profile + Neo4j（未内置）。", "tune": "当前配置不生效。", "pitfalls": "无。"}},
+    "pdf_page_retrieve": {"title": "PDF 页检索", "implemented": "fallback", "execution_note": "未实现页面级多模态检索：执行时共享稠密/词法检索结果。", "teach": {"what": "设计目标：按 PDF 页图文检索（ColPali 类）。当前退化为普通文本检索。", "tune": "当前配置不生效。", "pitfalls": "无。"}},
+    "cache": {"title": "缓存", "implemented": "stub", "execution_note": "占位直通：节点级缓存未实现（HTTP 层无缓存）。", "teach": {"what": "设计目标：按 question+recipe_hash 缓存整次运行结果。", "tune": "ttl_seconds 当前不生效。", "pitfalls": "缓存必须以 recipe_hash 为 key 的一部分，否则改了 Recipe 还命中旧答案。"}},
+    "rate_limit": {"title": "限流", "implemented": "stub", "execution_note": "节点级限流是占位；真实限流在 API 中间件（OPENRAG_RATE_LIMIT_PER_MINUTE）。", "teach": {"what": "设计目标：对单条 Recipe 限流。当前生效的是服务级中间件限流，不是这个节点。", "tune": "requests_per_minute 当前不生效；要限流请配环境变量。", "pitfalls": "别把节点摆上画布当成已限流——去看 /api 中间件配置。"}},
+    "approval": {"title": "人工审批", "implemented": "live", "execution_note": "真实执行：运行在此停住并标记 approval_required，绝不自动放行。", "teach": {"what": "受控 Agent 的关键闸门：草稿必须人工审批，框架不代替人做决定。", "tune": "required 固定为 true 是有意设计。", "pitfalls": "无。"}},
+    "build_ticket_draft": {"title": "工单草稿", "implemented": "live", "execution_note": "真实执行：字段抽取为启发式正则，生成结构化草稿并列出缺失字段。", "teach": {"what": "从用户消息抽取工单字段，缺什么列什么，产出待审批草稿，声明禁用动作清单。", "tune": "字段规则在 app.py，按业务工单模型扩展。", "pitfalls": "正则抽取只是演示级；生产应换成受约束的结构化抽取。"}},
+}
+
+# 结构化配置表单的字段描述：工作台据此渲染表单（JSON 仅作为高级模式）。
+# effective=False 表示该字段当前不被执行器读取（诚实标注，前端置灰提示）。
+CONFIG_SCHEMAS: dict[str, list[dict[str, Any]]] = {
+    "parse_route": [{"key": "route", "label": "解析路由", "type": "select", "options": ["auto", "native_text", "html_structure", "pdf_page_text", "pdf_layout", "office_structure", "tabular", "json_structure"], "effective": True, "help": "auto 按文件签名自动选择"}],
+    "chunker": [
+        {"key": "max_chars", "label": "Chunk 大小（字符）", "type": "number", "min": 200, "max": 8000, "step": 50, "effective": True, "help": "上传/重解析时生效"},
+        {"key": "overlap", "label": "重叠（字符）", "type": "number", "min": 0, "max": 800, "step": 10, "effective": True, "help": "相邻 Chunk 重叠区"},
+    ],
+    "embed_index": [
+        {"key": "model_ref", "label": "Embedding 模型", "type": "model", "model_kind": "embedding", "effective": True, "help": "上传时选择的 Embedding 覆盖此项"},
+        {"key": "collection", "label": "Qdrant Collection", "type": "text", "effective": False, "help": "当前固定使用配置的 collection"},
+    ],
+    "dense_retrieve": [
+        {"key": "top_k", "label": "Top K", "type": "number", "min": 1, "max": 20, "step": 1, "effective": True, "help": "节点配置优先于请求参数"},
+        {"key": "score_threshold", "label": "分数阈值", "type": "number", "min": 0, "max": 1, "step": 0.05, "effective": True, "help": "低于阈值的向量命中被丢弃"},
+        {"key": "model_ref", "label": "Embedding 模型", "type": "model", "model_kind": "embedding", "effective": False, "help": "查询侧必须与索引侧同模型，暂不支持单独切换"},
+    ],
+    "sparse_retrieve": [{"key": "top_k", "label": "Top K", "type": "number", "min": 1, "max": 50, "step": 1, "effective": False, "help": "稀疏索引未实现，仅记录"}],
+    "rrf_fusion": [{"key": "k", "label": "RRF k", "type": "number", "min": 1, "max": 200, "step": 1, "effective": False, "help": "占位节点，不生效"}],
+    "reranker": [
+        {"key": "model_ref", "label": "Reranker 模型", "type": "model", "model_kind": "reranker", "effective": False, "help": "占位节点，不生效"},
+        {"key": "candidate_k", "label": "精排候选数", "type": "number", "min": 1, "max": 100, "step": 1, "effective": False},
+        {"key": "final_k", "label": "输出条数", "type": "number", "min": 1, "max": 20, "step": 1, "effective": False},
+    ],
+    "context_builder": [
+        {"key": "token_budget", "label": "Token 预算", "type": "number", "min": 500, "max": 16000, "step": 100, "effective": False, "help": "占位节点，不生效"},
+        {"key": "mmr_lambda", "label": "MMR λ", "type": "number", "min": 0, "max": 1, "step": 0.05, "effective": False},
+    ],
+    "llm_generate": [
+        {"key": "model_ref", "label": "Chat 模型", "type": "model", "model_kind": "chat", "effective": True, "help": "绑定注册的 OpenAI 兼容端点"},
+        {"key": "temperature", "label": "温度", "type": "number", "min": 0, "max": 2, "step": 0.05, "effective": True},
+        {"key": "max_tokens", "label": "最大 Token", "type": "number", "min": 64, "max": 4096, "step": 32, "effective": True},
+    ],
+    "metadata_filter": [{"key": "on_empty", "label": "过滤为空时", "type": "select", "options": ["fallback_once", "fail"], "effective": False, "help": "占位节点，不生效"}],
+    "bounded_corrective": [{"key": "max_retries", "label": "最大重试", "type": "number", "min": 0, "max": 3, "step": 1, "effective": False, "help": "占位节点，不生效"}],
+    "cache": [{"key": "ttl_seconds", "label": "TTL（秒）", "type": "number", "min": 0, "max": 86400, "step": 30, "effective": False, "help": "占位节点，不生效"}],
+    "rate_limit": [{"key": "requests_per_minute", "label": "每分钟请求数", "type": "number", "min": 1, "max": 6000, "step": 1, "effective": False, "help": "真实限流请配 OPENRAG_RATE_LIMIT_PER_MINUTE"}],
+    "approval": [{"key": "required", "label": "必须人工审批", "type": "boolean", "effective": True, "help": "固定为 true 是有意设计"}],
+}
+
+
 def node_catalog() -> dict[str, dict[str, Any]]:
     config_hints = {
         "parse_route": {"route": "auto"},
@@ -61,7 +141,20 @@ def node_catalog() -> dict[str, dict[str, Any]]:
         "cache": {"ttl_seconds": 300, "key": "question+recipe_hash"},
         "approval": {"required": True},
     }
-    return {node_type: {**spec, "description": f"{node_type} component", "config_defaults": config_hints.get(node_type, {})} for node_type, spec in NODE_CATALOG.items()}
+    catalog: dict[str, dict[str, Any]] = {}
+    for node_type, spec in NODE_CATALOG.items():
+        meta = NODE_META.get(node_type, {})
+        catalog[node_type] = {
+            **spec,
+            "title": meta.get("title", node_type),
+            "implemented": meta.get("implemented", "stub"),
+            "execution_note": meta.get("execution_note", ""),
+            "description": meta.get("execution_note") or f"{node_type} component",
+            "teach": meta.get("teach", {}),
+            "config_defaults": config_hints.get(node_type, {}),
+            "config_schema": CONFIG_SCHEMAS.get(node_type, []),
+        }
+    return catalog
 
 
 def _canonical(recipe: Recipe) -> bytes:
@@ -121,7 +214,7 @@ def default_recipes() -> list[Recipe]:
         Recipe(recipe_id="v1_controlled_agent", name="V1 Controlled Agent", version="1.0.0", nodes=[RecipeNode(id="q", type="question"), RecipeNode(id="d", type="dense_retrieve"), RecipeNode(id="draft", type="build_ticket_draft"), RecipeNode(id="approval", type="approval")], edges=[RecipeEdge(source="q", source_port="query", target="d", target_port="query"), RecipeEdge(source="q", source_port="query", target="draft", target_port="query"), RecipeEdge(source="d", source_port="candidates", target="draft", target_port="candidates"), RecipeEdge(source="draft", source_port="artifact", target="approval", target_port="artifact")]),
     ]
     hybrid = next(recipe for recipe in recipes if recipe.recipe_id == "v0_2_hybrid")
-    def hybrid_variant(recipe_id: str, name: str, extra_nodes: list[RecipeNode], extra_edges: list[RecipeEdge], remove_edges: set[tuple[str, str, str, str]] = set()) -> Recipe:
+    def hybrid_variant(recipe_id: str, name: str, extra_nodes: list[RecipeNode], extra_edges: list[RecipeEdge], remove_edges: frozenset[tuple[str, str, str, str]] = frozenset()) -> Recipe:
         edges = [edge for edge in hybrid.edges if (edge.source, edge.source_port, edge.target, edge.target_port) not in remove_edges]
         match = re.match(r"v(\d+)_(\d+)", recipe_id)
         version = f"{match.group(1)}.{match.group(2)}.0" if match else "0.1.0"

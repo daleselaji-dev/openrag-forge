@@ -8,7 +8,6 @@ import zipfile
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 from xml.etree import ElementTree
 
 from bs4 import BeautifulSoup
