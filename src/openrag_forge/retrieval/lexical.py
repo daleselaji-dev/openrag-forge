@@ -43,7 +43,7 @@ def bm25_rank(query: str, chunks: list[Chunk], top_k: int = 20, k1: float = 1.5,
             frequencies[token] = frequencies.get(token, 0) + 1
     scored: list[tuple[float, Chunk]] = []
     unique_query = set(query_tokens)
-    for doc, chunk in zip(docs, chunks):
+    for doc, chunk in zip(docs, chunks, strict=True):
         score = 0.0
         length = len(doc) or 1
         counts: dict[str, int] = {}

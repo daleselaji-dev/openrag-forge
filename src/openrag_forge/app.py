@@ -36,7 +36,7 @@ from pydantic import BaseModel, Field
 from .adapters.qdrant import QdrantAdapter
 from .config import settings
 from .domain.models import Document, Evidence, Recipe, RunResult, utc_now
-from .generation.client import extractive_answer, generate_grounded_answer
+from .generation.client import extractive_answer
 from .net import close_http_client, get_http_client
 from .observability import (
     get_logger,

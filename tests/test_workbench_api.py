@@ -32,7 +32,7 @@ def test_upload_blocks_chunks_and_enrichment(tmp_path, monkeypatch):
     with TestClient(app) as client:
         upload = client.post(
             "/api/v1/knowledge-bases/default/documents",
-            files={"file": ("faq.md", "# Refund policy\n\nCustomers may dispute an unknown charge with the issuing bank.".encode(), "text/markdown")},
+            files={"file": ("faq.md", b"# Refund policy\n\nCustomers may dispute an unknown charge with the issuing bank.", "text/markdown")},
         )
         assert upload.status_code == 200
         payload = upload.json()
@@ -68,7 +68,7 @@ def test_hybrid_run_offline_records_honest_backends(tmp_path, monkeypatch):
     with TestClient(app) as client:
         client.post(
             "/api/v1/knowledge-bases/default/documents",
-            files={"file": ("faq.md", "Customers may dispute an unknown charge with the issuing bank first.".encode(), "text/markdown")},
+            files={"file": ("faq.md", b"Customers may dispute an unknown charge with the issuing bank first.", "text/markdown")},
         )
         run = client.post("/api/v1/runs", json={"knowledge_base_id": "default", "recipe_id": "v0_2_hybrid", "question": "How should a customer dispute an unknown charge?", "mode": "run"})
         assert run.status_code == 200
@@ -98,7 +98,7 @@ def test_cache_node_short_circuits_second_run(tmp_path, monkeypatch):
     with TestClient(app) as client:
         client.post(
             "/api/v1/knowledge-bases/default/documents",
-            files={"file": ("faq.md", "Support agents verify the merchant and the charge date.".encode(), "text/markdown")},
+            files={"file": ("faq.md", b"Support agents verify the merchant and the charge date.", "text/markdown")},
         )
         request = {"knowledge_base_id": "default", "recipe_id": "v0_9_operations", "question": "What does the support agent verify first?", "mode": "run"}
         first = client.post("/api/v1/runs", json=request).json()
@@ -117,7 +117,7 @@ def test_bounded_corrective_records_bounded_retry(tmp_path, monkeypatch):
     with TestClient(app) as client:
         client.post(
             "/api/v1/knowledge-bases/default/documents",
-            files={"file": ("faq.md", "Chargeback SOP: verify merchant descriptor and posting date.".encode(), "text/markdown")},
+            files={"file": ("faq.md", b"Chargeback SOP: verify merchant descriptor and posting date.", "text/markdown")},
         )
         run = client.post("/api/v1/runs", json={"knowledge_base_id": "default", "recipe_id": "v0_6_corrective", "question": "完全无关的问题词汇组合", "mode": "run"})
         assert run.status_code == 200
