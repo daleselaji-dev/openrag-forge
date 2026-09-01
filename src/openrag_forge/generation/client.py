@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -46,7 +47,20 @@ def generate_grounded_answer(
     api_key = (profile.get("api_key") if profile else None) or settings.chat_api_key or settings.model_api_key
     if not base_url or model_name == "local-chat-model":
         return extractive_answer(question, evidence), "extractive_fallback"
-    with start_span("rag.llm.generate", {"model": model_name, "evidence_count": len(evidence)}) as span:
+    span_attributes: dict[str, Any] = {
+        "gen_ai.system": "OpenAI-compatible",
+        "gen_ai.operation.name": "chat",
+        "gen_ai.request.model": model_name,
+        "gen_ai.request.temperature": temperature,
+        "gen_ai.request.max_tokens": max_tokens,
+        "evidence_count": len(evidence),
+    }
+    if settings.langfuse_capture_content:
+        span_attributes["gen_ai.prompt"] = json.dumps(
+            [{"role": "system", "content": "You answer only from supplied evidence."}, {"role": "user", "content": prompt}],
+            ensure_ascii=False,
+        )
+    with start_span("rag.llm.generate", span_attributes) as span:
         try:
             headers: dict[str, str] = {}
             if api_key:
@@ -69,8 +83,17 @@ def generate_grounded_answer(
             content = str(response.json().get("choices", [{}])[0].get("message", {}).get("content", "")).strip()
             if not content:
                 raise RuntimeError("模型返回空回答")
+            payload = response.json()
             if span is not None:
                 span.set_attribute("provider", "openai_compatible_chat")
+                span.set_attribute("gen_ai.response.model", str(payload.get("model", model_name)))
+                usage = payload.get("usage") or {}
+                if usage.get("prompt_tokens") is not None:
+                    span.set_attribute("gen_ai.usage.input_tokens", int(usage["prompt_tokens"]))
+                if usage.get("completion_tokens") is not None:
+                    span.set_attribute("gen_ai.usage.output_tokens", int(usage["completion_tokens"]))
+                if settings.langfuse_capture_content:
+                    span.set_attribute("gen_ai.completion", json.dumps([{"role": "assistant", "content": content}], ensure_ascii=False))
             return content, "openai_compatible_chat"
         except Exception as exc:
             logger.warning("LLM 生成降级为摘要式回答", extra={"error_type": type(exc).__name__, "chat_base_url": base_url})

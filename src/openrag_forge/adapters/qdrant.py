@@ -26,7 +26,7 @@ class QdrantAdapter:
         return headers
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        with start_span("rag.embed", {"input_count": len(texts), "model": self.config.embedding_model}):
+        with start_span("rag.embed", {"input_count": len(texts), "model": self.config.embedding_model, "gen_ai.system": "OpenAI-compatible", "gen_ai.operation.name": "embeddings", "gen_ai.request.model": self.config.embedding_model}):
             response = get_http_client().post(
                 self._embedding_url(),
                 json={"model": self.config.embedding_model, "input": texts},

@@ -33,6 +33,9 @@ python scripts/push_langfuse_scores.py --report reports/framework_smoke_latest.j
 `refusal_correctness`、`latency_ms`），不会把“模型觉得正确”冒充成事实。发布门禁仍读取
 本地报告；Langfuse 负责长期趋势和逐条 Trace 复盘。
 
+默认只发送模型、操作类型、耗时和 token usage；若本地调试需要在 Langfuse 中直接查看 prompt/completion，
+显式设置 `OPENRAG_LANGFUSE_CAPTURE_CONTENT=true` 后重启 API。生产环境应保持关闭，并优先使用 PII 脱敏后的摘要或哈希。
+
 ## 一键启动本地可观测性栈
 
 ```bash

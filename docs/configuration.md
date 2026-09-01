@@ -81,6 +81,7 @@ Evidence Capsule 或日志。
 | `OPENRAG_LANGFUSE_PUBLIC_KEY` | 空 | Langfuse project public key，经 Secret 注入 |
 | `OPENRAG_LANGFUSE_SECRET_KEY` | 空 | Langfuse project secret key，经 Secret 注入 |
 | `OPENRAG_LANGFUSE_SAMPLE_RATIO` | `1.0` | Langfuse trace 采样率；高流量可降到 0.05~0.2 |
+| `OPENRAG_LANGFUSE_CAPTURE_CONTENT` | `false` | 是否把 prompt/completion 写入 OTel span；本地调试可开，生产默认关闭并配合 PII 策略 |
 
 ## 启动时的配置校验
 

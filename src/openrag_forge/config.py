@@ -93,6 +93,7 @@ class Settings(BaseSettings):
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     langfuse_sample_ratio: float = 1.0
+    langfuse_capture_content: bool = False
 
     # ------------------------------------------------------------------
     # 检索与业务 Trace
