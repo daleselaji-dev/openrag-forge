@@ -171,6 +171,23 @@ class Store:
             row = db.execute("SELECT payload FROM runs WHERE run_id=?", (run_id,)).fetchone()
         return json.loads(row["payload"]) if row else None
 
+    def list_runs(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self._connect() as db:
+            rows = db.execute("SELECT payload, created_at FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        items = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            items.append({
+                "run_id": payload.get("run_id"), "recipe_id": payload.get("recipe_id"),
+                "recipe_hash": payload.get("recipe_hash"), "status": payload.get("status"),
+                "answer_preview": (payload.get("answer") or "")[:160],
+                "evidence_count": len(payload.get("evidence") or []),
+                "trace_count": len(payload.get("trace") or []),
+                "safety": payload.get("safety") or {},
+                "created_at": row["created_at"],
+            })
+        return items
+
     def save_trace(self, event: TraceEvent) -> None:
         with self._connect() as db:
             db.execute("INSERT OR REPLACE INTO trace_events VALUES (?, ?, ?)", (event.run_id, event.sequence, event.model_dump_json()))

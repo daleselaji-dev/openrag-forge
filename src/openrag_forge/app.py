@@ -36,7 +36,7 @@ from pydantic import BaseModel, Field
 from .adapters.qdrant import QdrantAdapter
 from .config import settings
 from .domain.models import Document, Evidence, Recipe, RunResult, utc_now
-from .generation.client import generate_grounded_answer
+from .generation.client import extractive_answer, generate_grounded_answer
 from .net import close_http_client, get_http_client
 from .observability import (
     get_logger,
@@ -51,8 +51,10 @@ from .observability import (
 from .observability.middleware import RequestContextMiddleware
 from .observability.telemetry import TraceContextMiddleware
 from .parsers.chunker import chunk_blocks
+from .parsers.enricher import enrich_chunks
 from .parsers.router import parse_bytes
 from .pipeline.compiler import CompileError, compile_recipe, default_recipes, node_catalog
+from .pipeline.executor import QueryExecutor
 from .pipeline.trace import TraceRecorder
 from .policies.basic import detect_request_risks
 from .security import ApiKeyMiddleware, RateLimitMiddleware, SecurityHeadersMiddleware
@@ -98,8 +100,15 @@ class ModelRegistration(BaseModel):
     provider: str = "openai-compatible"
     base_url: str = Field(min_length=1, max_length=500)
     model_name: str = Field(min_length=1, max_length=240)
+    api_key: str | None = Field(default=None, max_length=500)
     parameters: dict[str, Any] = Field(default_factory=dict)
     source: Literal["endpoint", "manifest"] = "endpoint"
+
+
+def _public_model(payload: dict[str, Any]) -> dict[str, Any]:
+    data = {key: value for key, value in payload.items() if key != "api_key"}
+    data["has_api_key"] = bool(payload.get("api_key"))
+    return data
 
 
 class ScenarioDefinition(BaseModel):
@@ -174,15 +183,13 @@ def _ingest_chunk_config(ingest_recipe: Recipe | None) -> tuple[int, int]:
     return max_chars, overlap
 
 
-def _extractive_answer(question: str, evidence: list[Evidence]) -> str:
-    if not evidence:
-        return "当前知识库没有足够证据支持回答。请补充文档或改写问题。"
-    lines = ["根据当前知识库检索到的证据："]
-    for item in evidence[:3]:
-        excerpt = item.text[:420].strip()
-        lines.append(f"[{item.citation}] {excerpt}")
-    lines.append("以上内容是文档证据摘要，不代表账户调查结果、退款承诺或法律结论。")
-    return "\n".join(lines)
+_extractive_answer = extractive_answer
+
+
+def _resolve_model(model_ref: str) -> dict[str, Any] | None:
+    if not model_ref:
+        return None
+    return app.state.store.get_model(model_ref)
 
 
 def _request_is_high_risk(question: str) -> list[str]:
@@ -250,6 +257,7 @@ async def lifespan(app: FastAPI):
         store.save_scenario(scenario["scenario_id"], {**scenario, "source": "builtin"})
     app.state.store = store
     app.state.qdrant = QdrantAdapter(settings)
+    app.state.runtime = {"cache": {}, "rate": {}}
     logger.info("OpenRAG Forge 启动完成", extra={"profile": settings.profile, "environment": settings.environment, "tracing": tracing_on})
     yield
     # ---- 关机阶段（优雅关机）----
@@ -391,6 +399,7 @@ def upload_document(knowledge_base_id: str, file: UploadFile = File(...), route:
         chunks = chunk_blocks(blocks, max_chars, overlap)
         ingest_trace.record("chunk", "completed", f"生成 {len(chunks)} 个 Chunk（max_chars={max_chars}, overlap={overlap}）", {"blocks": len(blocks), "chunks": len(chunks), "max_chars": max_chars, "overlap": overlap, "execution": "live", "node_type": "chunker"}, started=step_started)
         step_started = time.perf_counter()
+        chunks = enrich_chunks(chunks, blocks, filename)
         document = document.model_copy(update={"status": "parsed", "parser_route": decision.route, "parser_confidence": decision["confidence"], "reason_codes": decision["reason_codes"]})
         app.state.store.update_document(document)
         app.state.store.save_blocks(blocks)
@@ -403,7 +412,7 @@ def upload_document(knowledge_base_id: str, file: UploadFile = File(...), route:
                 model = app.state.store.get_model(embedding_model_id)
                 if model is None or model.get("kind") != "embedding":
                     raise HTTPException(status_code=422, detail="指定的 embedding_model_id 未注册或不是 Embedding 模型")
-                model_settings = settings.model_copy(update={"embedding_base_url": model["base_url"], "embedding_model": model["model_name"]})
+                model_settings = settings.model_copy(update={"embedding_base_url": model["base_url"], "embedding_model": model["model_name"], "embedding_api_key": model.get("api_key") or settings.embedding_api_key or settings.model_api_key})
                 indexer = QdrantAdapter(model_settings)
             index = indexer.index(chunks)
             index["embedding_model_id"] = embedding_model_id or "configured-embedding"
@@ -444,25 +453,37 @@ def get_chunks(document_id: str):
 
 
 @app.post("/api/v1/documents/{document_id}/reprocess")
-def reprocess_document(document_id: str, route: str | None = None):
+def reprocess_document(document_id: str, route: str | None = None, max_chars: int | None = None, overlap: int | None = None, embedding_model_id: str | None = None):
     document = app.state.store.get_document(document_id)
     if document is None:
         raise HTTPException(status_code=404, detail="文档不存在")
     path = settings.upload_dir / f"{document.document_id}_{document.filename}"
-    max_chars, overlap = _ingest_chunk_config(app.state.store.get_recipe("custom_ingest"))
+    ingest_recipe = app.state.store.get_recipe("custom_ingest")
+    default_max, default_overlap = _ingest_chunk_config(ingest_recipe)
+    effective_max = max(200, min(4000, int(max_chars or default_max)))
+    effective_overlap = max(0, min(400, int(overlap or default_overlap)))
     try:
         decision, blocks = parse_bytes(document_id, document.filename, document.media_type, path.read_bytes(), route)
-        chunks = chunk_blocks(blocks, max_chars, overlap)
+        chunks = chunk_blocks(blocks, effective_max, effective_overlap)
+        chunks = enrich_chunks(chunks, blocks, document.filename)
         updated = document.model_copy(update={"status": "parsed", "version": document.version + 1, "parser_route": decision.route, "parser_confidence": decision["confidence"], "reason_codes": decision["reason_codes"]})
         app.state.store.update_document(updated)
         app.state.store.save_blocks(blocks)
         app.state.store.save_chunks(chunks)
         try:
-            index = app.state.qdrant.index(chunks)
+            indexer = app.state.qdrant
+            if embedding_model_id:
+                model = app.state.store.get_model(embedding_model_id)
+                if model is None or model.get("kind") != "embedding":
+                    raise HTTPException(status_code=422, detail="指定的 embedding_model_id 未注册或不是 Embedding 模型")
+                indexer = QdrantAdapter(settings.model_copy(update={"embedding_base_url": model["base_url"], "embedding_model": model["model_name"], "embedding_api_key": model.get("api_key") or settings.embedding_api_key or settings.model_api_key}))
+            index = indexer.index(chunks)
+        except HTTPException:
+            raise
         except Exception as index_error:
             observe_fallback("qdrant_index")
             index = {"status": "deferred", "reason": str(index_error), "next_action": "启动 Embedding 与 Qdrant 后重建索引"}
-        return {"document": updated, "route": decision, "blocks": len(blocks), "chunks": len(chunks), "index": index}
+        return {"document": updated, "route": decision, "blocks": len(blocks), "chunks": len(chunks), "index": index, "max_chars": effective_max, "overlap": effective_overlap}
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"重新解析失败：{exc}") from exc
 
@@ -496,13 +517,13 @@ def create_scenario(scenario: ScenarioDefinition):
 
 @app.get("/api/v1/models")
 def list_models():
-    return {"items": app.state.store.list_models(), "import_policy": "Register an OpenAI-compatible endpoint or a JSON manifest; model weight files stay in LM Studio/Ollama/vLLM and are never executed by the web app."}
+    return {"items": [_public_model(model) for model in app.state.store.list_models()], "import_policy": "Register an OpenAI-compatible endpoint or a JSON manifest; model weight files stay in LM Studio/Ollama/vLLM and are never executed by the web app."}
 
 
 @app.post("/api/v1/models")
 def register_model(model: ModelRegistration):
     app.state.store.save_model(model.model_id, model.model_dump())
-    return {"status": "registered", "model": model}
+    return {"status": "registered", "model": _public_model(model.model_dump())}
 
 
 @app.post("/api/v1/models/{model_id}/probe")
@@ -512,13 +533,16 @@ def probe_model(model_id: str):
         raise HTTPException(status_code=404, detail="模型未注册")
     base_url = str(model["base_url"]).rstrip("/")
     client = get_http_client()
+    headers: dict[str, str] = {}
+    if model.get("api_key"):
+        headers["Authorization"] = f"Bearer {model['api_key']}"
     try:
         if model["kind"] == "embedding":
-            response = client.post(f"{base_url}/embeddings", json={"model": model["model_name"], "input": ["OpenRAG Forge probe"]}, timeout=30)
+            response = client.post(f"{base_url}/embeddings", json={"model": model["model_name"], "input": ["OpenRAG Forge probe"]}, headers=headers, timeout=30)
         elif model["kind"] == "chat":
-            response = client.get(f"{base_url}/models", timeout=10)
+            response = client.get(f"{base_url}/models", headers=headers, timeout=10)
         else:
-            response = client.get(f"{base_url}/models", timeout=10)
+            response = client.get(f"{base_url}/models", headers=headers, timeout=10)
         response.raise_for_status()
         return {"status": "ready", "model_id": model_id, "kind": model["kind"], "details": {"http_status": response.status_code, "base_url": base_url}}
     except Exception as exc:
@@ -563,6 +587,41 @@ def validate_recipe(recipe_id: str):
     return {"status": "valid", "recipe": compiled}
 
 
+@app.post("/api/v1/recipes/import")
+def import_recipes(payload: dict[str, Any]):
+    if isinstance(payload.get("recipes"), list):
+        raw_items = payload["recipes"]
+    elif isinstance(payload.get("recipe"), dict):
+        raw_items = [payload["recipe"]]
+    elif "nodes" in payload and "recipe_id" in payload:
+        raw_items = [payload]
+    else:
+        raise HTTPException(status_code=422, detail="无法识别的 Recipe JSON：需要 recipe_id + nodes，或 recipe / recipes 包装")
+    imported = []
+    for raw in raw_items:
+        try:
+            recipe = Recipe.model_validate({**raw, "status": "draft", "hash": None})
+            existing = app.state.store.get_recipe(recipe.recipe_id)
+            if existing is not None and existing.status == "published":
+                recipe = recipe.model_copy(update={"recipe_id": f"{recipe.recipe_id}_imported", "name": f"{recipe.name} (imported)"})
+            compiled = compile_recipe(recipe).model_copy(update={"status": "draft"})
+            app.state.store.save_recipe(compiled)
+            imported.append(compiled.model_dump())
+        except CompileError as exc:
+            raise HTTPException(status_code=422, detail=f"Recipe {raw.get('recipe_id', '?')} 编译失败：{exc}") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"Recipe JSON 校验失败：{exc}") from exc
+    return {"status": "imported", "count": len(imported), "items": imported}
+
+
+@app.get("/api/v1/recipes/{recipe_id}/export")
+def export_recipe(recipe_id: str):
+    recipe = app.state.store.get_recipe(recipe_id)
+    if recipe is None:
+        raise HTTPException(status_code=404, detail="Recipe 不存在")
+    return JSONResponse(content=recipe.model_dump(mode="json"), headers={"Content-Disposition": f'attachment; filename="{recipe_id}.recipe.json"'})
+
+
 @app.post("/api/v1/recipes/{recipe_id}/publish")
 def publish_recipe(recipe_id: str):
     recipe = app.state.store.get_recipe(recipe_id)
@@ -593,14 +652,29 @@ def _execute(request: RunRequest) -> RunResult:
     chunks = app.state.store.list_chunks(request.knowledge_base_id)
     answer: str | None = None
     if request.mode == "preview":
+        catalog = node_catalog()
         for node_id in _topological(recipe):
             node_started = time.perf_counter()
             node = _node(recipe, node_id)
-            recorder.record(node_id, "completed", "Preview：已编译节点，未调用外部模型或写入索引", {"preview": True, "execution": "preview_compile_only", "node_type": node.type}, started=node_started)
+            meta = catalog.get(node.type, {})
+            recorder.record(
+                node_id,
+                "completed",
+                "Preview：已编译节点，未调用外部模型或写入索引",
+                {
+                    "preview": True,
+                    "execution": "preview_compile_only",
+                    "node_type": node.type,
+                    "impact": {
+                        "runtime": meta.get("implemented", "stub"),
+                        "config_used": {**meta.get("config_defaults", {}), **(node.config or {})},
+                    },
+                },
+                started=node_started,
+            )
         result = RunResult(run_id=run_id, recipe_id=recipe.recipe_id, recipe_hash=recipe.hash or "", status="completed", trace=recorder.events, safety={"mode": "preview", "side_effects": False})
         observe_run(recipe.recipe_id, "preview", time.perf_counter() - run_started)
     else:
-        query_tokens = _tokens(request.question)
         risk_codes = _request_is_high_risk(request.question)
         if risk_codes:
             for node_id in _topological(recipe):
@@ -618,82 +692,26 @@ def _execute(request: RunRequest) -> RunResult:
             capsule_path = settings.artifact_dir / f"{run_id}.json"
             capsule_path.write_text(json.dumps({"capsule_version": "0.1", "created_at": utc_now(), "settings": {"profile": settings.profile, "chat_model": settings.chat_model, "embedding_model": settings.embedding_model}, **payload}, ensure_ascii=False, indent=2), encoding="utf-8")
             return result
-        qdrant_hits: list[dict[str, Any]] = []
-        try:
-            if chunks:
-                qdrant_hits = app.state.qdrant.search(request.question, request.top_k)
-                truth_chunk_ids = {chunk.chunk_id for chunk in chunks}
-                qdrant_hits = [hit for hit in qdrant_hits if str(hit.get("payload", {}).get("chunk_id", "")) in truth_chunk_ids]
-        except Exception:
-            qdrant_hits = []
-        for node_id in _topological(recipe):
-            node = _node(recipe, node_id)
-            node_started = time.perf_counter()
-            if node.type in {"dense_retrieve", "sparse_retrieve", "graph_query", "pdf_page_retrieve"}:
-                # 节点配置真实生效：top_k / score_threshold 优先读节点 config，
-                # 其次退回请求参数与全局设置，越界值收敛到安全区间。
-                node_top_k = int(_clamp(node.config.get("top_k"), 1, 20, request.top_k))
-                node_threshold = _clamp(node.config.get("score_threshold"), 0.0, 1.0, settings.retrieval_score_threshold)
-                qdrant_hits = [hit for hit in qdrant_hits if float(hit.get("score", 0.0)) >= node_threshold]
-                if qdrant_hits:
-                    evidence = [Evidence(citation=f"S{index + 1}", chunk_id=str(hit.get("payload", {}).get("chunk_id", hit.get("id"))), document_id=str(hit.get("payload", {}).get("document_id", "")), title=str(hit.get("payload", {}).get("title", hit.get("payload", {}).get("document_id", ""))), text=str(hit.get("payload", {}).get("text", "")), score=round(float(hit.get("score", 0.0)), 4), metadata=hit.get("payload", {})) for index, hit in enumerate(qdrant_hits[:node_top_k])]
-                    backend = "qdrant_dense"
-                else:
-                    scored = []
-                    for chunk in chunks:
-                        overlap = len(query_tokens & _tokens(chunk.text))
-                        if overlap:
-                            scored.append((overlap / max(1, len(query_tokens)), chunk))
-                    scored.sort(key=lambda item: item[0], reverse=True)
-                    evidence = [Evidence(citation=f"S{index + 1}", chunk_id=chunk.chunk_id, document_id=chunk.document_id, title=chunk.metadata.get("title") or chunk.document_id, text=chunk.text, score=round(score, 4), metadata=chunk.metadata) for index, (score, chunk) in enumerate(scored[:node_top_k])]
-                    backend = "lexical_fallback"
-                    if chunks:
-                        # 向量检索退化为词法检索：结果可用但质量下降，必须计入降级指标
-                        observe_fallback("qdrant_search")
-                # 诚实标注：dense_retrieve 是真实实现；sparse/graph/pdf 节点当前
-                # 共享同一条检索路径，execution 字段明确说明，禁止 UI 装作已实现。
-                if node.type == "dense_retrieve":
-                    execution = "live" if backend == "qdrant_dense" else "fallback_lexical"
-                    summary = f"召回 {len(evidence)} 条候选（{backend}）"
-                else:
-                    execution = "fallback_shared_dense"
-                    summary = f"{node.type} 未实现独立检索：共享稠密/词法路径，返回 {len(evidence)} 条候选"
-                recorder.record(node_id, "completed", summary, {"candidate_count": len(evidence), "backend": backend, "execution": execution, "top_k": node_top_k, "score_threshold": node_threshold, "node_type": node.type}, started=node_started)
-            elif node.type in {"context_builder", "reranker", "rrf_fusion"}:
-                recorder.record(node_id, "completed", f"占位直通：{node.type} 未实现，证据顺序未改变（{len(evidence)} 条）", {"evidence_count": len(evidence), "execution": "stub_passthrough", "node_type": node.type}, started=node_started)
-            elif node.type == "llm_generate":
-                # 生成参数真实生效：temperature / max_tokens / model_ref 来自节点配置。
-                temperature = _clamp(node.config.get("temperature"), 0.0, 2.0, 0.1)
-                max_tokens = int(_clamp(node.config.get("max_tokens"), 64, 4096, 600))
-                gen_settings = settings
-                model_ref = str(node.config.get("model_ref") or "")
-                if model_ref:
-                    bound = app.state.store.get_model(model_ref)
-                    if bound and bound.get("kind") == "chat":
-                        gen_settings = settings.model_copy(update={"chat_base_url": bound["base_url"], "chat_model": bound["model_name"]})
-                answer, provider = generate_grounded_answer(request.question, evidence, gen_settings, temperature=temperature, max_tokens=max_tokens)
-                if evidence and not re.search(r"\[S\d+\]", answer):
-                    answer = _extractive_answer(request.question, evidence)
-                    provider = "citation_repair_fallback"
-                    observe_fallback("citation_repair")
-                execution = "live" if provider == "openai_compatible_chat" else "fallback_extractive"
-                recorder.record(node_id, "completed", "生成受证据约束的回答", {"provider": provider, "citation_count": len(evidence), "citation_repaired": provider == "citation_repair_fallback", "execution": execution, "model": gen_settings.chat_model, "temperature": temperature, "max_tokens": max_tokens, "node_type": node.type}, started=node_started)
-            elif node.type == "policy_gate":
-                recorder.record(node_id, "completed", "安全策略通过；未发现外部副作用动作", {"human_review": not bool(evidence), "execution": "live", "node_type": node.type}, started=node_started)
-            elif node.type == "approval":
-                recorder.record(node_id, "completed", "停在人工审批门", {"approval_required": True, "execution": "live", "node_type": node.type}, started=node_started)
-            elif node.type == "build_ticket_draft":
-                normalized = request.question.lower()
-                supplied = {"merchant": bool(re.search(r"merchant|商户", normalized)), "date": bool(re.search(r"\b20\d{2}[-/]\d{1,2}[-/]\d{1,2}\b|日期|date", normalized)), "previous_actions": bool(re.search(r"contacted|联系过|此前|previous", normalized))}
-                missing = [field for field, present in supplied.items() if not present]
-                artifact = {"artifact_type": "ticket_draft", "status": "pending_human_approval", "fields": {"message": request.question, "merchant": None, "date": None, "previous_actions": None}, "missing_fields": missing, "evidence_ids": [item.citation for item in evidence], "forbidden_actions": ["send_customer_message", "write_external_crm", "promise_refund", "decide_legal_liability"]}
-                answer = f"已生成客服工单草稿，仍缺少字段：{', '.join(missing) if missing else '无'}。草稿必须经过人工审批。"
-                recorder.record(node_id, "completed", "生成结构化工单草稿，未执行外部动作", {"missing_fields": missing, "approval_required": True, "execution": "live", "node_type": node.type}, started=node_started)
-            elif node.type == "question":
-                recorder.record(node_id, "completed", "接收查询问题", {"execution": "live", "node_type": node.type}, started=node_started)
-            else:
-                recorder.record(node_id, "completed", f"占位直通：{node.type} 未实现真实逻辑，仅记录经过", {"execution": "stub_passthrough", "node_type": node.type}, started=node_started)
-        result = RunResult(run_id=run_id, recipe_id=recipe.recipe_id, recipe_hash=recipe.hash or "", status="completed", answer=answer, artifact=artifact, evidence=evidence, trace=recorder.events, safety={"side_effects": False, "human_review": not bool(evidence) or bool(artifact)})
+        executor = QueryExecutor(
+            recipe=recipe,
+            question=request.question,
+            top_k=request.top_k,
+            chunks=chunks,
+            store=app.state.store,
+            settings=settings,
+            qdrant=app.state.qdrant,
+            recorder=recorder,
+            runtime=app.state.runtime,
+            resolve_model=_resolve_model,
+        )
+        executor.execute()
+        answer = executor.answer
+        artifact = executor.artifact
+        evidence = executor.evidence
+        safety = dict(executor.safety)
+        safety.setdefault("side_effects", False)
+        safety.setdefault("human_review", not bool(evidence) or bool(artifact))
+        result = RunResult(run_id=run_id, recipe_id=recipe.recipe_id, recipe_hash=recipe.hash or "", status="completed", answer=answer, artifact=artifact, evidence=evidence, trace=recorder.events, safety=safety)
         observe_run(recipe.recipe_id, "completed", time.perf_counter() - run_started)
     payload = result.model_dump(mode="json")
     app.state.store.save_run(payload)
@@ -710,6 +728,11 @@ def create_run(request: RunRequest):
 @app.post("/api/v1/query", response_model=RunResult)
 def query(request: QueryRequest):
     return _execute(RunRequest(**request.model_dump(), mode="run"))
+
+
+@app.get("/api/v1/runs")
+def list_runs(limit: int = 20):
+    return {"items": app.state.store.list_runs(min(max(limit, 1), 100))}
 
 
 @app.get("/api/v1/runs/{run_id}")

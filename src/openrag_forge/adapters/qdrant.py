@@ -9,15 +9,7 @@ from ..observability import start_span
 
 
 class QdrantAdapter:
-    """Optional derived index adapter. It never becomes the truth source.
-
-    生产化改造点（可对照 git 历史学习）：
-    1. 复用进程级连接池（net.get_http_client）替代每次新建连接；
-    2. 所有调用都有按用途细分的显式超时（settings.*_timeout_seconds）；
-    3. 支持 Qdrant API key（OPENRAG_QDRANT_API_KEY，生产用 Secret 注入）；
-    4. embed / index / search 均包裹 OTel span——在 Jaeger 里能直接看到
-       "这次提问 90% 的时间花在 embedding 还是向量检索"。
-    """
+    """Optional derived index adapter. It never becomes the truth source."""
 
     def __init__(self, config: Settings):
         self.config = config
@@ -26,15 +18,19 @@ class QdrantAdapter:
     def _embedding_url(self) -> str:
         return f"{self.config.embedding_base_url.rstrip('/')}/embeddings"
 
+    def _auth_headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        token = self.config.embedding_api_key or self.config.model_api_key
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        return headers
+
     def embed(self, texts: list[str]) -> list[list[float]]:
         with start_span("rag.embed", {"input_count": len(texts), "model": self.config.embedding_model}):
-            headers = {}
-            if self.config.model_api_key:
-                headers["Authorization"] = f"Bearer {self.config.model_api_key}"
             response = get_http_client().post(
                 self._embedding_url(),
                 json={"model": self.config.embedding_model, "input": texts},
-                headers=headers,
+                headers=self._auth_headers(),
                 timeout=self.config.embedding_timeout_seconds,
             )
             response.raise_for_status()

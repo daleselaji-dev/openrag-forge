@@ -20,3 +20,5 @@ web/dist/
 web/*.tsbuildinfo
 reports/
 .DS_Store
+
+src/*.egg-info/

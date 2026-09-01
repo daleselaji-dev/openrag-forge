@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from ..config import Settings
 from ..domain.models import Evidence
@@ -10,17 +11,27 @@ from ..observability import observe_fallback, start_span
 logger = logging.getLogger(__name__)
 
 
-def generate_grounded_answer(question: str, evidence: list[Evidence], settings: Settings, *, temperature: float = 0.1, max_tokens: int = 600) -> tuple[str, str]:
-    """Call an OpenAI-compatible chat endpoint, falling back safely when unavailable.
+def extractive_answer(question: str, evidence: list[Evidence]) -> str:
+    if not evidence:
+        return "当前知识库没有足够证据支持回答。请补充文档或改写问题。"
+    lines = ["根据当前知识库检索到的证据："]
+    for item in evidence[:3]:
+        excerpt = item.text[:420].strip()
+        lines.append(f"[{item.citation}] {excerpt}")
+    lines.append("以上内容是文档证据摘要，不代表账户调查结果、退款承诺或法律结论。")
+    return "\n".join(lines)
 
-    生产化改造点：
-    1. 复用共享连接池 + settings.chat_timeout_seconds 显式超时；
-    2. 支持云端模型的 Bearer 鉴权（OPENRAG_MODEL_API_KEY）；
-    3. 整个生成过程包裹 OTel span（rag.llm.generate），带 provider/model 属性——
-       LLM 是延迟大头，必须能在 Jaeger 里单独看到它的耗时；
-    4. 降级不再静默：记录 warning 日志 + openrag_degraded_fallbacks_total 指标，
-       保证"服务没挂但答案质量下降"的状态对运维可见、可告警。
-    """
+
+def generate_grounded_answer(
+    question: str,
+    evidence: list[Evidence],
+    settings: Settings,
+    *,
+    profile: dict[str, Any] | None = None,
+    temperature: float = 0.1,
+    max_tokens: int = 600,
+) -> tuple[str, str]:
+    """Call an OpenAI-compatible chat endpoint, falling back safely when unavailable."""
     if not evidence:
         return "当前知识库没有足够证据支持回答。请补充文档或改写问题。", "no_evidence"
     context = "\n\n".join(f"[{item.citation}] {item.text}" for item in evidence)
@@ -30,19 +41,20 @@ def generate_grounded_answer(question: str, evidence: list[Evidence], settings: 
         "不要承诺退款，不要认定违法，不要推断账户状态。只输出中文简洁回答。\n\n"
         f"问题：{question}\n证据：\n{context}"
     )
-    if not settings.chat_base_url or settings.chat_model == "local-chat-model":
-        from ..app import _extractive_answer
-
-        return _extractive_answer(question, evidence), "extractive_fallback"
-    with start_span("rag.llm.generate", {"model": settings.chat_model, "evidence_count": len(evidence)}) as span:
+    base_url = str(profile["base_url"]) if profile else settings.chat_base_url
+    model_name = str(profile["model_name"]) if profile else settings.chat_model
+    api_key = (profile.get("api_key") if profile else None) or settings.chat_api_key or settings.model_api_key
+    if not base_url or model_name == "local-chat-model":
+        return extractive_answer(question, evidence), "extractive_fallback"
+    with start_span("rag.llm.generate", {"model": model_name, "evidence_count": len(evidence)}) as span:
         try:
-            headers = {}
-            if settings.model_api_key:
-                headers["Authorization"] = f"Bearer {settings.model_api_key}"
+            headers: dict[str, str] = {}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
             response = get_http_client().post(
-                f"{settings.chat_base_url.rstrip('/')}/chat/completions",
+                f"{base_url.rstrip('/')}/chat/completions",
                 json={
-                    "model": settings.chat_model,
+                    "model": model_name,
                     "temperature": temperature,
                     "max_tokens": max_tokens,
                     "messages": [
@@ -61,12 +73,9 @@ def generate_grounded_answer(question: str, evidence: list[Evidence], settings: 
                 span.set_attribute("provider", "openai_compatible_chat")
             return content, "openai_compatible_chat"
         except Exception as exc:
-            # 明确记录降级原因（异常类型足够定位，不打全文避免日志注入与刷屏）
-            logger.warning("LLM 生成降级为摘要式回答", extra={"error_type": type(exc).__name__, "chat_base_url": settings.chat_base_url})
+            logger.warning("LLM 生成降级为摘要式回答", extra={"error_type": type(exc).__name__, "chat_base_url": base_url})
             observe_fallback("llm_generate")
             if span is not None:
                 span.set_attribute("provider", "extractive_fallback")
                 span.set_attribute("fallback_reason", type(exc).__name__)
-            from ..app import _extractive_answer
-
-            return _extractive_answer(question, evidence), "extractive_fallback"
+            return extractive_answer(question, evidence), "extractive_fallback"

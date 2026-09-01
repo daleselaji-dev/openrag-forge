@@ -38,7 +38,7 @@ class ParserRouter:
         if suffix in {"html", "htm"} or "html" in media_type:
             return RouteDecision(route="html_structure", confidence=0.98, reason_codes=["html_structure"], fallback_route="native_text")
         if suffix == "pdf":
-            has_tables = bool(re.search(rb"table|column|figure|report", content[:200_000], re.I))
+            has_tables = bool(re.search(rb"table|column|figure|report", content[:200_000], re.IGNORECASE))
             return RouteDecision(route="pdf_layout" if has_tables else "pdf_page_text", confidence=0.90 if has_tables else 0.96, reason_codes=["pdf_has_layout_hints" if has_tables else "pdf_text_baseline"], fallback_route="pdf_page_text")
         if suffix in {"docx", "pptx"}:
             return RouteDecision(route="office_structure", confidence=0.96, reason_codes=[f"{suffix}_xml"], fallback_route="native_text")
