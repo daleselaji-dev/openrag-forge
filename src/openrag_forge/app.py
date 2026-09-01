@@ -542,7 +542,12 @@ def probe_model(model_id: str):
         elif model["kind"] == "chat":
             response = client.get(f"{base_url}/models", headers=headers, timeout=10)
         else:
-            response = client.get(f"{base_url}/models", headers=headers, timeout=10)
+            response = client.post(
+                f"{base_url}/rerank",
+                json={"model": model["model_name"], "query": "OpenRAG Forge probe", "documents": ["probe document"], "top_n": 1},
+                headers=headers,
+                timeout=30,
+            )
         response.raise_for_status()
         return {"status": "ready", "model_id": model_id, "kind": model["kind"], "details": {"http_status": response.status_code, "base_url": base_url}}
     except Exception as exc:

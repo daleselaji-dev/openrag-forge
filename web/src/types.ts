@@ -104,6 +104,7 @@ export type ModelProfile = {
   model_name: string
   parameters: Record<string, unknown>
   source: string
+  has_api_key?: boolean
 }
 
 export type Scenario = {

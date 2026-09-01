@@ -7,17 +7,17 @@ type Props = {
   models: ModelProfile[]
   teachOn: boolean
   probes: ProbeState
-  onRegister: (form: { model_id: string; display_name: string; kind: string; base_url: string; model_name: string }) => Promise<boolean>
+  onRegister: (form: { model_id: string; display_name: string; kind: string; base_url: string; model_name: string; api_key?: string }) => Promise<boolean>
   onProbe: (modelId: string) => void
 }
 
 export default function ModelRail({ models, teachOn, probes, onRegister, onProbe }: Props) {
-  const [form, setForm] = useState({ model_id: '', display_name: '', kind: 'chat', base_url: 'http://localhost:1234/v1', model_name: '' })
+  const [form, setForm] = useState({ model_id: '', display_name: '', kind: 'chat', base_url: 'http://localhost:1234/v1', model_name: '', api_key: '' })
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     const ok = await onRegister(form)
-    if (ok) setForm({ model_id: '', display_name: '', kind: 'chat', base_url: form.base_url, model_name: '' })
+    if (ok) setForm({ model_id: '', display_name: '', kind: 'chat', base_url: form.base_url, model_name: '', api_key: '' })
   }
 
   return (
@@ -34,6 +34,7 @@ export default function ModelRail({ models, teachOn, probes, onRegister, onProbe
         </select>
         <input placeholder="base_url，如 http://localhost:1234/v1" value={form.base_url} onChange={(event) => setForm({ ...form, base_url: event.target.value })} required />
         <input placeholder="服务中的 model name" value={form.model_name} onChange={(event) => setForm({ ...form, model_name: event.target.value })} required />
+        <input type="password" placeholder="API key（可选，不会展示）" value={form.api_key} onChange={(event) => setForm({ ...form, api_key: event.target.value })} autoComplete="new-password" />
         <button type="submit" className="primary">注册模型</button>
       </form>
       <div className="model-list">

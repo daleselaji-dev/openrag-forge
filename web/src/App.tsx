@@ -343,7 +343,7 @@ function App() {
     }
   }
 
-  const registerModel = async (form: { model_id: string; display_name: string; kind: string; base_url: string; model_name: string }): Promise<boolean> => {
+  const registerModel = async (form: { model_id: string; display_name: string; kind: string; base_url: string; model_name: string; api_key?: string }): Promise<boolean> => {
     try {
       const body = await api<{ model: ModelProfile }>('/api/v1/models', postJson({ ...form, parameters: {}, source: 'endpoint' }))
       setModels((items) => [...items.filter((item) => item.model_id !== body.model.model_id), body.model])
