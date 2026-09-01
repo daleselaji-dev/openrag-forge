@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
-
-import httpx
 
 from ..config import Settings
 from ..domain.models import Evidence
+from ..net import get_http_client
+from ..observability import observe_fallback, start_span
+
+logger = logging.getLogger(__name__)
 
 
 def extractive_answer(question: str, evidence: list[Evidence]) -> str:
-    """确定性的抽取式回答：模型不可用或引用缺失时的降级路径。"""
     if not evidence:
         return "当前知识库没有足够证据支持回答。请补充文档或改写问题。"
     lines = ["根据当前知识库检索到的证据："]
@@ -24,15 +26,12 @@ def generate_grounded_answer(
     question: str,
     evidence: list[Evidence],
     settings: Settings,
+    *,
     profile: dict[str, Any] | None = None,
     temperature: float = 0.1,
     max_tokens: int = 600,
 ) -> tuple[str, str]:
-    """Call an OpenAI-compatible chat endpoint, falling back safely when unavailable.
-
-    profile：模型注册表中的 chat 模型档案（base_url / model_name / api_key / parameters），
-    覆盖全局 settings；api_key 只在服务端使用，永不进入 Trace。
-    """
+    """Call an OpenAI-compatible chat endpoint, falling back safely when unavailable."""
     if not evidence:
         return "当前知识库没有足够证据支持回答。请补充文档或改写问题。", "no_evidence"
     context = "\n\n".join(f"[{item.citation}] {item.text}" for item in evidence)
@@ -44,31 +43,39 @@ def generate_grounded_answer(
     )
     base_url = str(profile["base_url"]) if profile else settings.chat_base_url
     model_name = str(profile["model_name"]) if profile else settings.chat_model
-    api_key = (profile.get("api_key") if profile else None) or settings.chat_api_key
+    api_key = (profile.get("api_key") if profile else None) or settings.chat_api_key or settings.model_api_key
     if not base_url or model_name == "local-chat-model":
         return extractive_answer(question, evidence), "extractive_fallback"
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    try:
-        response = httpx.post(
-            f"{base_url.rstrip('/')}/chat/completions",
-            headers=headers,
-            json={
-                "model": model_name,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "messages": [
-                    {"role": "system", "content": "You answer only from supplied evidence."},
-                    {"role": "user", "content": prompt},
-                ],
-            },
-            timeout=90,
-        )
-        response.raise_for_status()
-        content = str(response.json().get("choices", [{}])[0].get("message", {}).get("content", "")).strip()
-        if not content:
-            raise RuntimeError("模型返回空回答")
-        return content, "openai_compatible_chat"
-    except Exception:
-        return extractive_answer(question, evidence), "extractive_fallback"
+    with start_span("rag.llm.generate", {"model": model_name, "evidence_count": len(evidence)}) as span:
+        try:
+            headers: dict[str, str] = {}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+            response = get_http_client().post(
+                f"{base_url.rstrip('/')}/chat/completions",
+                json={
+                    "model": model_name,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "messages": [
+                        {"role": "system", "content": "You answer only from supplied evidence."},
+                        {"role": "user", "content": prompt},
+                    ],
+                },
+                headers=headers,
+                timeout=settings.chat_timeout_seconds,
+            )
+            response.raise_for_status()
+            content = str(response.json().get("choices", [{}])[0].get("message", {}).get("content", "")).strip()
+            if not content:
+                raise RuntimeError("模型返回空回答")
+            if span is not None:
+                span.set_attribute("provider", "openai_compatible_chat")
+            return content, "openai_compatible_chat"
+        except Exception as exc:
+            logger.warning("LLM 生成降级为摘要式回答", extra={"error_type": type(exc).__name__, "chat_base_url": base_url})
+            observe_fallback("llm_generate")
+            if span is not None:
+                span.set_attribute("provider", "extractive_fallback")
+                span.set_attribute("fallback_reason", type(exc).__name__)
+            return extractive_answer(question, evidence), "extractive_fallback"

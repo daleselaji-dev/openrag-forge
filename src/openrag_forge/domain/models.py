@@ -64,6 +64,9 @@ class TraceEvent(BaseModel):
     summary: str
     duration_ms: float = 0.0
     details: dict[str, Any] = Field(default_factory=dict)
+    # 关联的 OpenTelemetry trace_id：把业务审计 Trace 与 Jaeger 里的
+    # 性能链路串起来（在 Jaeger 搜索框粘贴此值即可）。tracing 关闭时为 None。
+    otel_trace_id: str | None = None
     created_at: str = Field(default_factory=utc_now)
 
 

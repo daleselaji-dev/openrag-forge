@@ -44,254 +44,83 @@ NODE_CATALOG: dict[str, dict[str, Any]] = {
 }
 
 
-# runtime 字段的诚实约定：
-#   implemented  —— 运行层有真实行为（可能带降级路径，降级会写入 Trace 的 backend/fallback 字段）
-#   degradable   —— 有真实后端调用路径，但后端不可用时按 Trace 声明降级/直通
-#   stub         —— compile-complete / runtime-stub：编译期类型约束完整，运行层暂无真实后端
-NODE_DOCS: dict[str, dict[str, Any]] = {
-    "parse_route": {
-        "title": "解析路由", "runtime": "implemented",
-        "description": "按内容签名（%PDF、PK zip 头）+ 扩展名 + MIME 确定性选择解析器路由，输出 confidence 与 reason_codes；用户可显式覆盖。",
-        "why": "路由必须可解释、可复测、零成本，因此用规则而不是 LLM。",
-        "downstream": "路由决定 Block 的类型与粒度，直接影响 Chunk 切分与检索证据的出处。",
-        "tunables": [
-            {"name": "route", "type": "enum", "options": ["auto", "native_text", "html_structure", "pdf_page_text", "pdf_layout", "office_structure", "tabular", "json_structure"], "description": "auto 表示按内容自动路由；显式指定会记录 user_selected_route"},
-        ],
-    },
-    "native_parser": {
-        "title": "文本解析", "runtime": "implemented",
-        "description": "按空行切分纯文本 / Markdown 为 paragraph Block。等价于 parse_route 固定选择 native_text 路由。",
-        "why": "最保守的兜底解析器，任何格式失败后都能落到这里。",
-        "downstream": "产出的 paragraph Block 是 Chunk 的最小单位。",
-        "tunables": [],
-    },
-    "pdf_parser": {
-        "title": "PDF 解析", "runtime": "implemented",
-        "description": "pypdf 逐页抽取文本，产出 page 级 Block（带页码）。等价于 parse_route 固定选择 pdf_page_text。",
-        "why": "页级 Block 保留页码出处，可支撑 pdf_page_retrieve 页级检索。",
-        "downstream": "page Block 的页码进入 Chunk metadata，可用于引用定位。",
-        "tunables": [],
-    },
-    "office_parser": {
-        "title": "Office 解析", "runtime": "implemented",
-        "description": "解压 DOCX/PPTX zip 包并抽取 XML 文本，产出 paragraph Block。等价于 parse_route 固定选择 office_structure。",
-        "why": "不依赖重型 Office 运行时，Lite 安装即可解析。",
-        "downstream": "文档结构（part 名）保留在 Block metadata。",
-        "tunables": [],
-    },
-    "tabular_parser": {
-        "title": "表格解析", "runtime": "implemented",
-        "description": "CSV/XLSX 逐行产出 row Block，保留行号。等价于 parse_route 固定选择 tabular。",
-        "why": "行级 Block 让表格数据可以按行被检索与引用。",
-        "downstream": "row Block 的行号进入 Chunk metadata。",
-        "tunables": [],
-    },
-    "chunker": {
-        "title": "Chunker", "runtime": "implemented",
-        "description": "把 Block 切成固定窗口 + 重叠的 Chunk，每个 Chunk 记录来源 block_ids。max_chars / overlap 实际生效于 ingest。",
-        "why": "Chunk 是检索与引用的原子单位；窗口大小直接影响召回粒度与上下文预算。",
-        "downstream": "chunk_id 是 Evidence 引用和 Qdrant payload 的主键。",
-        "tunables": [
-            {"name": "max_chars", "type": "int", "min": 200, "max": 4000, "description": "单个 Chunk 最大字符数；越小召回越精确但上下文越碎"},
-            {"name": "overlap", "type": "int", "min": 0, "max": 400, "description": "相邻 Chunk 重叠字符数，缓解切断句子的问题"},
-        ],
-    },
-    "metadata_enricher": {
-        "title": "Metadata 增强", "runtime": "implemented",
-        "description": "为每个 Chunk 补充 title（最近标题/文件名）、language（zh/en 比例检测）、keywords（词频 Top-K），写入 Chunk metadata。",
-        "why": "Metadata 是 metadata_filter 与引用展示的数据来源。",
-        "downstream": "增强字段随 Chunk 进入 Qdrant payload 与 Evidence metadata。",
-        "tunables": [
-            {"name": "keywords_top_k", "type": "int", "min": 0, "max": 20, "description": "每个 Chunk 提取的关键词数量；0 表示关闭"},
-        ],
-    },
-    "embed_index": {
-        "title": "Embedding / 派生索引", "runtime": "implemented",
-        "description": "调用 OpenAI 兼容 Embedding 端点向量化 Chunk 并写入 Qdrant。失败时状态为 deferred（含 next_action），真相源不受影响。",
-        "why": "Qdrant 永远是可重建的派生索引；索引失败不阻塞上传解析。",
-        "downstream": "决定 dense_retrieve 的召回质量；embedding 模型可按知识库切换。",
-        "tunables": [
-            {"name": "model_ref", "type": "model", "kind": "embedding", "description": "绑定注册的 Embedding 模型"},
-            {"name": "collection", "type": "string", "description": "Qdrant collection 名称"},
-        ],
-    },
-    "question": {
-        "title": "问题入口", "runtime": "implemented",
-        "description": "接收用户问题，做规范化与分词，输出 query。请求级安全门在此之前执行。",
-        "why": "把问题作为显式节点，让 Trace 从第一步就可审计。",
-        "downstream": "query 供检索与生成节点消费。",
-        "tunables": [],
-    },
-    "intent_router": {
-        "title": "意图路由", "runtime": "implemented",
-        "description": "启发式规则判断问题意图（procedural / factual / comparison / risk），记录进 Trace 供下游参考。",
-        "why": "意图是选择检索策略与提示词的依据；当前为规则实现，可替换为分类模型。",
-        "downstream": "意图写入 Trace impact，不改变查询本身。",
-        "tunables": [],
-    },
-    "metadata_filter": {
-        "title": "Metadata 过滤", "runtime": "implemented",
-        "description": "按 fields 配置过滤候选 Chunk（如 block_type、language）。过滤后为空时按 on_empty 策略回退一次并在 Trace 记录。",
-        "why": "版本化政策等场景必须先按元数据缩小候选池，避免混用过期内容。",
-        "downstream": "缩小 dense/sparse 检索的候选池。",
-        "tunables": [
-            {"name": "fields", "type": "json", "description": "键值对过滤条件，匹配 Chunk metadata，如 {\"block_type\": \"page\"}"},
-            {"name": "on_empty", "type": "enum", "options": ["fallback_once", "fail"], "description": "过滤后为空的行为：回退到未过滤候选或直接报告失败"},
-        ],
-    },
-    "dense_retrieve": {
-        "title": "Dense 检索", "runtime": "implemented",
-        "description": "向量检索：Embedding 问题 → Qdrant 搜索 → 分数阈值过滤 → 真相源 chunk_id 过滤。Qdrant/Embedding 不可用时降级为本地词法检索（Trace 记录 backend=lexical_fallback）。",
-        "why": "语义召回主路径；真相源过滤保证索引幽灵点永远不会成为证据。",
-        "downstream": "输出 candidates 供融合 / 重排 / 上下文构建。",
-        "tunables": [
-            {"name": "top_k", "type": "int", "min": 1, "max": 50, "description": "召回候选数量"},
-            {"name": "score_threshold", "type": "float", "min": 0, "max": 1, "description": "低于该余弦分数的命中被丢弃"},
-            {"name": "model_ref", "type": "model", "kind": "embedding", "description": "查询侧 Embedding 模型（须与索引一致）"},
-        ],
-    },
-    "sparse_retrieve": {
-        "title": "Sparse / BM25 检索", "runtime": "implemented",
-        "description": "内置 BM25 词法检索（backend=bm25_local），直接在 SQLite 真相源 Chunk 上打分，无需外部服务。Qdrant named-sparse 后端仍在 roadmap，若配置了该 backend 会在 Trace 中如实记录回退。",
-        "why": "关键词/编号/术语类问题上词法检索优于向量；也是完全离线可用的召回路径。",
-        "downstream": "输出 candidates，与 dense 候选做 RRF 融合。",
-        "tunables": [
-            {"name": "top_k", "type": "int", "min": 1, "max": 50, "description": "召回候选数量"},
-            {"name": "k1", "type": "float", "min": 0.5, "max": 3, "description": "BM25 词频饱和参数"},
-            {"name": "b", "type": "float", "min": 0, "max": 1, "description": "BM25 长度归一化参数"},
-        ],
-    },
-    "rrf_fusion": {
-        "title": "RRF 融合", "runtime": "implemented",
-        "description": "对多路候选列表执行 Reciprocal Rank Fusion：score = Σ weight / (k + rank)。只有一路候选时如实直通并在 Trace 标注。",
-        "why": "无需调分数刻度即可稳健融合 dense 与 sparse 两路召回。",
-        "downstream": "输出融合排序后的 candidates。",
-        "tunables": [
-            {"name": "k", "type": "int", "min": 1, "max": 200, "description": "RRF 平滑常数，越大排名差异影响越小"},
-            {"name": "weights", "type": "json", "description": "各路候选权重数组，如 [1.0, 0.7]"},
-        ],
-    },
-    "reranker": {
-        "title": "Cross-Encoder 重排", "runtime": "degradable",
-        "description": "若绑定的 reranker 模型端点提供 /rerank 接口（Cohere/Jina/TEI 兼容）则真实调用重排；后端不可用时如实直通，Trace 记录 backend=passthrough 与原因，绝不静默伪装。",
-        "why": "重排在候选多、问题模糊时收益最大；但没有后端就不该假装重排过。",
-        "downstream": "输出精排后的 evidence（final_k 条）。",
-        "tunables": [
-            {"name": "model_ref", "type": "model", "kind": "reranker", "description": "绑定注册的 Reranker 模型"},
-            {"name": "candidate_k", "type": "int", "min": 1, "max": 100, "description": "参与重排的候选数量"},
-            {"name": "final_k", "type": "int", "min": 1, "max": 20, "description": "重排后保留的证据数量"},
-        ],
-    },
-    "context_builder": {
-        "title": "上下文构建", "runtime": "implemented",
-        "description": "对候选/证据去重、按分数排序、套用 token_budget 字符预算截断，产出最终 Evidence 列表与拼接后的 context。丢弃与保留数量写入 Trace。",
-        "why": "上下文预算是成本与幻觉控制的核心旋钮；证据在这里获得 [S#] 引用编号。",
-        "downstream": "context 供 llm_generate；evidence 供 policy_gate 与 Capsule。",
-        "tunables": [
-            {"name": "token_budget", "type": "int", "min": 500, "max": 32000, "description": "上下文预算（近似 token 数），超出的证据被丢弃并记录"},
-            {"name": "max_per_doc", "type": "int", "min": 0, "max": 10, "description": "单文档最多保留证据数；0 表示不限制"},
-        ],
-    },
-    "parent_expansion": {
-        "title": "父子块扩展", "runtime": "implemented",
-        "description": "对每条证据按真相源中的相邻 Chunk（同文档 order±window）扩展上下文文本，扩展量写入 Trace。",
-        "why": "小 Chunk 召回精确但上下文不足；父子扩展兼顾两者。",
-        "downstream": "扩展后的 evidence 文本进入上下文与引用展示。",
-        "tunables": [
-            {"name": "window", "type": "int", "min": 1, "max": 3, "description": "向前后各扩展多少个相邻 Chunk"},
-            {"name": "max_chars_per_side", "type": "int", "min": 100, "max": 2000, "description": "每侧扩展文本的字符上限"},
-        ],
-    },
-    "llm_generate": {
-        "title": "LLM 生成", "runtime": "implemented",
-        "description": "调用 OpenAI 兼容 chat 端点生成受证据约束的回答。三级降级：模型 → 抽取式回答 → 明确说无证据；无 [S#] 引用时触发 citation_repair_fallback。实际使用的 provider 写入 Trace。",
-        "why": "生成必须被证据边界约束；降级路径保证离线也可用。",
-        "downstream": "answer 交给 policy_gate 审查。",
-        "tunables": [
-            {"name": "model_ref", "type": "model", "kind": "chat", "description": "绑定注册的 Chat 模型"},
-            {"name": "temperature", "type": "float", "min": 0, "max": 2, "description": "采样温度；证据问答建议 ≤0.3"},
-            {"name": "max_tokens", "type": "int", "min": 64, "max": 4000, "description": "回答最大 token 数"},
-        ],
-    },
-    "evidence_grade": {
-        "title": "证据评分", "runtime": "implemented",
-        "description": "按证据数量与最高分判定 sufficient / insufficient，输出 decision 供 bounded_corrective 消费。",
-        "why": "纠错检索必须由显式的证据判定触发，而不是模型自由裁量。",
-        "downstream": "decision=insufficient 时触发有限纠错重试。",
-        "tunables": [
-            {"name": "min_evidence", "type": "int", "min": 1, "max": 10, "description": "低于该证据数量判定为 insufficient"},
-            {"name": "min_top_score", "type": "float", "min": 0, "max": 1, "description": "最高分低于该值判定为 insufficient"},
-        ],
-    },
-    "policy_gate": {
-        "title": "安全策略门", "runtime": "implemented",
-        "description": "回答级审查：校验引用有效性（[S#] 必须对应真实证据）、无证据时强制 human_review。请求级高风险拦截在检索之前执行，被跳过的节点记录为 skipped。",
-        "why": "拒绝与放行都是需要审计的决策，全部落入 Trace 与 Capsule。",
-        "downstream": "输出最终安全决策，写入 RunResult.safety。",
-        "tunables": [
-            {"name": "require_citation", "type": "bool", "description": "有证据的回答必须包含 [S#] 引用"},
-        ],
-    },
-    "bounded_corrective": {
-        "title": "有限纠错检索", "runtime": "implemented",
-        "description": "decision=insufficient 时用查询变体（去停用词 + 领域词扩展）重跑一次检索，最多 max_retries 次（编译器强制显式上限，禁止无界循环）。重试前后候选数量写入 Trace。",
-        "why": "纠错是有界的显式节点，而不是 Agent 自由循环。",
-        "downstream": "重试成功时替换下游使用的候选集。",
-        "tunables": [
-            {"name": "max_retries", "type": "int", "min": 1, "max": 2, "description": "最大重试次数（硬上限 2）"},
-            {"name": "query_variant", "type": "enum", "options": ["domain_term_expansion", "keyword_only"], "description": "重试时的查询改写策略"},
-        ],
-    },
-    "graph_query": {
-        "title": "图谱检索", "runtime": "stub",
-        "description": "compile-complete / runtime-stub：编译期端口类型完整，运行层暂无 Neo4j 后端，执行时记录 skipped 并注明原因，不产出伪造证据。",
-        "why": "图谱检索需要 graph profile + Neo4j；诚实标注优于伪装执行。",
-        "downstream": "接入后可输出实体关系证据补充上下文。",
-        "tunables": [],
-    },
-    "pdf_page_retrieve": {
-        "title": "PDF 页级检索", "runtime": "implemented",
-        "description": "在 block_type=page 的 Chunk 上执行 BM25 页级检索，输出带页码的证据。没有 PDF 页级 Chunk 时如实记录 0 命中。",
-        "why": "版面/扫描类 PDF 先按页召回再细读，页码本身就是引用出处。",
-        "downstream": "页级证据与其它证据一起进入 context_builder。",
-        "tunables": [
-            {"name": "top_k", "type": "int", "min": 1, "max": 20, "description": "召回页数"},
-        ],
-    },
-    "cache": {
-        "title": "结果缓存", "runtime": "implemented",
-        "description": "按 question + recipe_hash 键的进程内 TTL 缓存。命中时下游检索/生成节点记录 skipped（reason=cache_hit）并复用缓存结果。",
-        "why": "生产信封组件：重复问题不重复付出模型成本。",
-        "downstream": "命中时替代整条检索生成链路。",
-        "tunables": [
-            {"name": "ttl_seconds", "type": "int", "min": 10, "max": 86400, "description": "缓存有效期（秒）"},
-        ],
-    },
-    "rate_limit": {
-        "title": "限流", "runtime": "implemented",
-        "description": "按 Recipe 的进程内滑动窗口限流。超限时记录 failed 并安全短路（HTTP 仍为 200，answer 说明限流），剩余配额写入 Trace。",
-        "why": "生产信封组件：保护下游模型服务。",
-        "downstream": "超限时跳过整条链路。",
-        "tunables": [
-            {"name": "requests_per_minute", "type": "int", "min": 1, "max": 6000, "description": "每分钟允许的请求数"},
-        ],
-    },
-    "approval": {
-        "title": "人工审批门", "runtime": "implemented",
-        "description": "Agent 产物强制停靠点：artifact 停在 pending_human_approval，框架层没有任何外部副作用执行路径。",
-        "why": "受控 Agent 的不变量：错误动作代价不对称的场景必须有人签字。",
-        "downstream": "终点节点，产物进入 Capsule 等待人工处理。",
-        "tunables": [
-            {"name": "required", "type": "bool", "description": "是否强制人工审批（受控场景应恒为 true）"},
-        ],
-    },
-    "build_ticket_draft": {
-        "title": "工单草稿", "runtime": "implemented",
-        "description": "从问题与证据生成结构化工单草稿：显式列出 missing_fields 与 forbidden_actions（发消息 / 写 CRM / 承诺退款 / 认定责任），永不执行外部动作。",
-        "why": "Agent 只产出草稿，动作留给人。",
-        "downstream": "artifact 流向 approval 节点停靠。",
-        "tunables": [],
-    },
+# ---------------------------------------------------------------------------
+# 节点目录元数据（供工作台展示与教学）。
+# implemented 字段是「诚实标注」的核心约定：
+#   live     —— 节点声明的算法在当前代码里真实执行；
+#   fallback —— 节点存在，但执行时退化为共享路径（如稀疏检索共用稠密结果）；
+#   stub     —— 仅在 Trace 中记录经过，不改变任何数据（占位直通）。
+# 工作台必须原样展示这些标注，禁止把 stub 呈现成已实现。
+# ---------------------------------------------------------------------------
+
+NODE_META: dict[str, dict[str, Any]] = {
+    "parse_route": {"title": "解析路由", "implemented": "live", "execution_note": "根据文件签名与扩展名选择真实解析器，决策带置信度与 reason_codes。", "teach": {"what": "上传的原始字节先经过路由：识别 PDF/Office/HTML/表格/纯文本，选出对应解析器。这是 RAG 数据面质量的第一道闸门。", "tune": "route=auto 让签名检测做决定；解析结果不对时可强制指定路由后 reprocess。", "pitfalls": "把扫描版 PDF 当纯文本解析会得到空 Block；路由错误应看 reason_codes 而不是直接换模型。"}},
+    "native_parser": {"title": "文本解析", "implemented": "live", "execution_note": "由 parse_route 路由到达时真实执行（Markdown/纯文本 → 结构化 Block）。", "teach": {"what": "把 Markdown / 纯文本按标题层级切成 Block，保留 heading_path。", "tune": "无参数；质量取决于原文结构是否清晰。", "pitfalls": "没有标题结构的长文本会变成大段 paragraph，后续 Chunk 边界会比较生硬。"}},
+    "pdf_parser": {"title": "PDF 解析", "implemented": "live", "execution_note": "按页提取文本；不做版面分析（layout 路由为轻量近似）。", "teach": {"what": "按页读取 PDF 文本层，每页一个 Block 并记录页码。", "tune": "扫描件（无文本层）需要 OCR，本框架未内置。", "pitfalls": "双栏排版按行拼接可能乱序；表格会被拍平成文本。"}},
+    "office_parser": {"title": "Office 解析", "implemented": "live", "execution_note": "DOCX/XLSX 结构化提取真实执行。", "teach": {"what": "从 Office XML 提取段落与表格行。", "tune": "无参数。", "pitfalls": "嵌入图片/图表内容不会被提取。"}},
+    "tabular_parser": {"title": "表格解析", "implemented": "live", "execution_note": "CSV/XLSX 每行生成 row Block，真实执行。", "teach": {"what": "把表格行转成带表头上下文的文本 Block，便于按行检索。", "tune": "无参数。", "pitfalls": "超宽表每行文本很长，注意 Chunk 大小配合。"}},
+    "chunker": {"title": "Chunker", "implemented": "live", "execution_note": "按 max_chars/overlap 滑窗切分，配置在上传时真实生效。", "teach": {"what": "把 Block 切成检索粒度的 Chunk。Chunk 是检索与引用的最小单位。", "tune": "max_chars 越小召回越精确但上下文越碎；overlap 用于缓解切断句子的伤害。改完在「数据」页重新上传或 reprocess 才会生效。", "pitfalls": "常见误区：无限加大 chunk 提升『上下文』——会稀释向量语义，召回反而变差。"}},
+    "metadata_enricher": {"title": "Metadata", "implemented": "live", "execution_note": "保存 heading_path/页码等基础 metadata；没有 LLM 增强。", "teach": {"what": "把标题路径、页码、block 类型等写入 Chunk metadata，供过滤与引用定位。", "tune": "无参数；进阶做法是用 LLM 生成摘要/标签（本框架未实现）。", "pitfalls": "metadata 缺失时 metadata_filter 类节点无从过滤。"}},
+    "embed_index": {"title": "Embedding / 索引", "implemented": "live", "execution_note": "调用 OpenAI 兼容 Embedding 端点并写入 Qdrant；服务不可用时降级 deferred（真相源不受影响）。", "teach": {"what": "把 Chunk 向量化写入 Qdrant。Qdrant 是可重建的派生索引，SQLite 才是真相源。", "tune": "model_ref 绑定注册过的 Embedding 模型；换模型后必须重建索引，否则新旧向量不可比。", "pitfalls": "索引 deferred ≠ 失败：文档已保存，模型服务就绪后用「重建索引」补齐。"}},
+    "question": {"title": "问题", "implemented": "live", "execution_note": "查询入口，透传问题文本。", "teach": {"what": "查询链路的入口节点，携带用户问题。", "tune": "无参数。", "pitfalls": "问题里含高风险措辞会触发安全门直接拒答（这是设计行为）。"}},
+    "intent_router": {"title": "意图路由", "implemented": "stub", "execution_note": "占位直通：未实现意图分类，仅在 Trace 中记录经过。", "teach": {"what": "设计目标：按问题意图选择不同检索分支（闲聊/事实/操作类）。当前为占位。", "tune": "当前配置不生效。", "pitfalls": "不要以为加了这个节点就有意图识别——看 Trace 里的 stub_passthrough 标记。"}},
+    "metadata_filter": {"title": "Metadata 过滤", "implemented": "live", "execution_note": "按 Chunk metadata 字段做检索前过滤；过滤为空时可 fallback_once。", "teach": {"what": "按版本/生效日期等 metadata 缩小检索范围。", "tune": "fields / on_empty 来自节点 config。", "pitfalls": "metadata 缺失时过滤可能为空集。"}},
+    "dense_retrieve": {"title": "稠密检索", "implemented": "live", "execution_note": "真实执行：优先 Qdrant 向量检索；Qdrant/Embedding 不可用时降级为词法重叠检索（Trace 标 fallback）。", "teach": {"what": "把问题向量化后在 Qdrant 里找最近邻 Chunk，是这条链路真正的召回主力。", "tune": "top_k 控制候选条数（本节点配置优先于请求参数）；score_threshold 过滤低分噪声。", "pitfalls": "threshold 设太高会把全部候选滤光，退化成『没有证据』；看 Trace 里 backend 字段确认走的是 qdrant_dense 还是 lexical_fallback。"}},
+    "sparse_retrieve": {"title": "稀疏检索 / BM25", "implemented": "live", "execution_note": "本地 BM25 稀疏检索（backend=bm25_local），与稠密检索并行产出独立候选集。", "teach": {"what": "BM25 关键词召回，与稠密检索互补。", "tune": "top_k / k1 / b 在节点 config 中可调。", "pitfalls": "语料极小时 BM25 分数可能偏低，可与 dense 一起做 RRF。"}},
+    "rrf_fusion": {"title": "RRF 融合", "implemented": "live", "execution_note": "对双路候选做真实 Reciprocal Rank Fusion 排名合并。", "teach": {"what": "合并多路召回的排序结果。", "tune": "k 参数控制融合平滑度。", "pitfalls": "只有一路候选时融合效果有限。"}},
+    "reranker": {"title": "重排", "implemented": "fallback", "execution_note": "端点提供 /rerank 时真实调用 Cross-Encoder；否则如实直通并记录原因。", "teach": {"what": "用 Cross-Encoder 精排候选。", "tune": "model_ref/candidate_k/final_k 来自节点配置。", "pitfalls": "本地未部署 rerank 端点时会降级直通。"}},
+    "context_builder": {"title": "上下文构建", "implemented": "live", "execution_note": "按 token 预算截断证据并拼装上下文。", "teach": {"what": "控制进入 Prompt 的证据体量。", "tune": "token_budget 真实生效。", "pitfalls": "预算过小会截断关键证据。"}},
+    "parent_expansion": {"title": "父块扩展", "implemented": "live", "execution_note": "命中子 Chunk 后按 block_ids 扩展父级上下文。", "teach": {"what": "小 Chunk 命中后回捞更大上下文。", "tune": "window / max_chars_per_side 可调。", "pitfalls": "无 block 关系时扩展为空。"}},
+    "llm_generate": {"title": "LLM 生成", "implemented": "live", "execution_note": "真实调用 OpenAI 兼容 Chat 端点；不可用时降级为证据摘要（extractive_fallback），缺引用时触发 citation_repair。", "teach": {"what": "用检索证据约束生成回答，要求每个事实引用 [S#]。", "tune": "model_ref 绑定注册的 Chat 模型，temperature/max_tokens 真实生效。", "pitfalls": "看 Trace 的 provider 字段：extractive_fallback 说明模型端点没接通，回答只是证据摘要。"}},
+    "evidence_grade": {"title": "证据评分", "implemented": "stub", "execution_note": "占位直通：未实现证据充分性评分。", "teach": {"what": "设计目标：判断证据是否足以回答，不足则触发纠错检索。", "tune": "当前配置不生效。", "pitfalls": "无。"}},
+    "policy_gate": {"title": "安全门", "implemented": "live", "execution_note": "真实执行，但仅是关键词正则风险检测 + 无副作用检查，不是完整内容安全系统。", "teach": {"what": "拦截高风险请求（退款承诺/违法认定等），并声明本次运行无外部副作用。", "tune": "风险词表在 policies/basic.py，按业务扩展。", "pitfalls": "正则门挡不住改写攻击；接真实客户前需要独立的内容安全服务。"}},
+    "bounded_corrective": {"title": "有限纠错", "implemented": "live", "execution_note": "证据不足时改写查询并重试一次（硬上限 max_retries）。", "teach": {"what": "有界纠错检索，防止无界循环。", "tune": "max_retries 必须显式声明。", "pitfalls": "重试仍无证据时会如实记录。"}},
+    "graph_query": {"title": "图谱查询", "implemented": "stub", "execution_note": "compile-complete / runtime-stub：Neo4j 图谱后端未实现，节点记录 skipped。", "teach": {"what": "设计目标：从知识图谱召回实体关系证据。需要 graph profile + Neo4j。", "tune": "当前配置不生效。", "pitfalls": "无 Neo4j 时不会产出伪造证据。"}},
+    "pdf_page_retrieve": {"title": "PDF 页检索", "implemented": "live", "execution_note": "在 page 类型 Chunk 上执行 BM25 页级检索。", "teach": {"what": "按 PDF 页召回证据。", "tune": "top_k 可调。", "pitfalls": "无页级 Chunk 时返回 0 命中。"}},
+    "cache": {"title": "缓存", "implemented": "live", "execution_note": "按 question+recipe_hash 的进程内 TTL 缓存；命中时下游节点记录 skipped。", "teach": {"what": "缓存整次运行结果。", "tune": "ttl_seconds 可调。", "pitfalls": "必须以 recipe_hash 为 key 的一部分。"}},
+    "rate_limit": {"title": "限流", "implemented": "live", "execution_note": "Recipe 级进程内滑动窗口限流；超限安全短路。API 中间件另有全局限流。", "teach": {"what": "保护下游模型服务。", "tune": "requests_per_minute 可调。", "pitfalls": "多副本部署需在网关层限流。"}},
+    "approval": {"title": "人工审批", "implemented": "live", "execution_note": "真实执行：运行在此停住并标记 approval_required，绝不自动放行。", "teach": {"what": "受控 Agent 的关键闸门：草稿必须人工审批，框架不代替人做决定。", "tune": "required 固定为 true 是有意设计。", "pitfalls": "无。"}},
+    "build_ticket_draft": {"title": "工单草稿", "implemented": "live", "execution_note": "真实执行：字段抽取为启发式正则，生成结构化草稿并列出缺失字段。", "teach": {"what": "从用户消息抽取工单字段，缺什么列什么，产出待审批草稿，声明禁用动作清单。", "tune": "字段规则在 app.py，按业务工单模型扩展。", "pitfalls": "正则抽取只是演示级；生产应换成受约束的结构化抽取。"}},
+}
+
+# 结构化配置表单的字段描述：工作台据此渲染表单（JSON 仅作为高级模式）。
+# effective=False 表示该字段当前不被执行器读取（诚实标注，前端置灰提示）。
+CONFIG_SCHEMAS: dict[str, list[dict[str, Any]]] = {
+    "parse_route": [{"key": "route", "label": "解析路由", "type": "select", "options": ["auto", "native_text", "html_structure", "pdf_page_text", "pdf_layout", "office_structure", "tabular", "json_structure"], "effective": True, "help": "auto 按文件签名自动选择"}],
+    "chunker": [
+        {"key": "max_chars", "label": "Chunk 大小（字符）", "type": "number", "min": 200, "max": 8000, "step": 50, "effective": True, "help": "上传/重解析时生效"},
+        {"key": "overlap", "label": "重叠（字符）", "type": "number", "min": 0, "max": 800, "step": 10, "effective": True, "help": "相邻 Chunk 重叠区"},
+    ],
+    "embed_index": [
+        {"key": "model_ref", "label": "Embedding 模型", "type": "model", "model_kind": "embedding", "effective": True, "help": "上传时选择的 Embedding 覆盖此项"},
+        {"key": "collection", "label": "Qdrant Collection", "type": "text", "effective": False, "help": "当前固定使用配置的 collection"},
+    ],
+    "dense_retrieve": [
+        {"key": "top_k", "label": "Top K", "type": "number", "min": 1, "max": 20, "step": 1, "effective": True, "help": "节点配置优先于请求参数"},
+        {"key": "score_threshold", "label": "分数阈值", "type": "number", "min": 0, "max": 1, "step": 0.05, "effective": True, "help": "低于阈值的向量命中被丢弃"},
+        {"key": "model_ref", "label": "Embedding 模型", "type": "model", "model_kind": "embedding", "effective": False, "help": "查询侧必须与索引侧同模型，暂不支持单独切换"},
+    ],
+    "sparse_retrieve": [{"key": "top_k", "label": "Top K", "type": "number", "min": 1, "max": 50, "step": 1, "effective": False, "help": "稀疏索引未实现，仅记录"}],
+    "rrf_fusion": [{"key": "k", "label": "RRF k", "type": "number", "min": 1, "max": 200, "step": 1, "effective": False, "help": "占位节点，不生效"}],
+    "reranker": [
+        {"key": "model_ref", "label": "Reranker 模型", "type": "model", "model_kind": "reranker", "effective": False, "help": "占位节点，不生效"},
+        {"key": "candidate_k", "label": "精排候选数", "type": "number", "min": 1, "max": 100, "step": 1, "effective": False},
+        {"key": "final_k", "label": "输出条数", "type": "number", "min": 1, "max": 20, "step": 1, "effective": False},
+    ],
+    "context_builder": [
+        {"key": "token_budget", "label": "Token 预算", "type": "number", "min": 500, "max": 16000, "step": 100, "effective": False, "help": "占位节点，不生效"},
+        {"key": "mmr_lambda", "label": "MMR λ", "type": "number", "min": 0, "max": 1, "step": 0.05, "effective": False},
+    ],
+    "llm_generate": [
+        {"key": "model_ref", "label": "Chat 模型", "type": "model", "model_kind": "chat", "effective": True, "help": "绑定注册的 OpenAI 兼容端点"},
+        {"key": "temperature", "label": "温度", "type": "number", "min": 0, "max": 2, "step": 0.05, "effective": True},
+        {"key": "max_tokens", "label": "最大 Token", "type": "number", "min": 64, "max": 4096, "step": 32, "effective": True},
+    ],
+    "metadata_filter": [{"key": "on_empty", "label": "过滤为空时", "type": "select", "options": ["fallback_once", "fail"], "effective": False, "help": "占位节点，不生效"}],
+    "bounded_corrective": [{"key": "max_retries", "label": "最大重试", "type": "number", "min": 0, "max": 3, "step": 1, "effective": False, "help": "占位节点，不生效"}],
+    "cache": [{"key": "ttl_seconds", "label": "TTL（秒）", "type": "number", "min": 0, "max": 86400, "step": 30, "effective": False, "help": "占位节点，不生效"}],
+    "rate_limit": [{"key": "requests_per_minute", "label": "每分钟请求数", "type": "number", "min": 1, "max": 6000, "step": 1, "effective": False, "help": "真实限流请配 OPENRAG_RATE_LIMIT_PER_MINUTE"}],
+    "approval": [{"key": "required", "label": "必须人工审批", "type": "boolean", "effective": True, "help": "固定为 true 是有意设计"}],
 }
 
 
@@ -299,36 +128,31 @@ def node_catalog() -> dict[str, dict[str, Any]]:
     config_hints = {
         "parse_route": {"route": "auto"},
         "chunker": {"max_chars": 1200, "overlap": 120},
-        "metadata_enricher": {"keywords_top_k": 5},
         "embed_index": {"model_ref": "configured-embedding", "collection": "openrag_forge"},
         "dense_retrieve": {"model_ref": "configured-embedding", "top_k": 5, "score_threshold": 0.0},
-        "sparse_retrieve": {"backend": "bm25_local", "top_k": 20, "k1": 1.5, "b": 0.75},
+        "sparse_retrieve": {"backend": "qdrant_named_sparse", "top_k": 20},
         "rrf_fusion": {"k": 60, "weights": [1.0, 1.0]},
         "reranker": {"model_ref": "configured-reranker", "candidate_k": 50, "final_k": 6},
-        "context_builder": {"token_budget": 4000, "max_per_doc": 0},
-        "parent_expansion": {"window": 1, "max_chars_per_side": 600},
+        "context_builder": {"token_budget": 4000, "official_minimum": 1, "mmr_lambda": 0.7},
         "llm_generate": {"model_ref": "configured-chat", "temperature": 0.1, "max_tokens": 600},
-        "evidence_grade": {"min_evidence": 1, "min_top_score": 0.05},
-        "policy_gate": {"require_citation": True},
         "bounded_corrective": {"max_retries": 1, "query_variant": "domain_term_expansion"},
         "metadata_filter": {"fields": {}, "on_empty": "fallback_once"},
-        "pdf_page_retrieve": {"top_k": 3},
         "rate_limit": {"requests_per_minute": 60},
         "cache": {"ttl_seconds": 300, "key": "question+recipe_hash"},
         "approval": {"required": True},
     }
     catalog: dict[str, dict[str, Any]] = {}
     for node_type, spec in NODE_CATALOG.items():
-        docs = NODE_DOCS.get(node_type, {})
+        meta = NODE_META.get(node_type, {})
         catalog[node_type] = {
             **spec,
-            "title": docs.get("title", node_type),
-            "runtime": docs.get("runtime", "stub"),
-            "description": docs.get("description", f"{node_type} component"),
-            "why": docs.get("why", ""),
-            "downstream": docs.get("downstream", ""),
-            "tunables": docs.get("tunables", []),
+            "title": meta.get("title", node_type),
+            "implemented": meta.get("implemented", "stub"),
+            "execution_note": meta.get("execution_note", ""),
+            "description": meta.get("execution_note") or f"{node_type} component",
+            "teach": meta.get("teach", {}),
             "config_defaults": config_hints.get(node_type, {}),
+            "config_schema": CONFIG_SCHEMAS.get(node_type, []),
         }
     return catalog
 
@@ -390,7 +214,7 @@ def default_recipes() -> list[Recipe]:
         Recipe(recipe_id="v1_controlled_agent", name="V1 Controlled Agent", version="1.0.0", nodes=[RecipeNode(id="q", type="question"), RecipeNode(id="d", type="dense_retrieve"), RecipeNode(id="draft", type="build_ticket_draft"), RecipeNode(id="approval", type="approval")], edges=[RecipeEdge(source="q", source_port="query", target="d", target_port="query"), RecipeEdge(source="q", source_port="query", target="draft", target_port="query"), RecipeEdge(source="d", source_port="candidates", target="draft", target_port="candidates"), RecipeEdge(source="draft", source_port="artifact", target="approval", target_port="artifact")]),
     ]
     hybrid = next(recipe for recipe in recipes if recipe.recipe_id == "v0_2_hybrid")
-    def hybrid_variant(recipe_id: str, name: str, extra_nodes: list[RecipeNode], extra_edges: list[RecipeEdge], remove_edges: set[tuple[str, str, str, str]] = set()) -> Recipe:
+    def hybrid_variant(recipe_id: str, name: str, extra_nodes: list[RecipeNode], extra_edges: list[RecipeEdge], remove_edges: frozenset[tuple[str, str, str, str]] = frozenset()) -> Recipe:
         edges = [edge for edge in hybrid.edges if (edge.source, edge.source_port, edge.target, edge.target_port) not in remove_edges]
         match = re.match(r"v(\d+)_(\d+)", recipe_id)
         version = f"{match.group(1)}.{match.group(2)}.0" if match else "0.1.0"

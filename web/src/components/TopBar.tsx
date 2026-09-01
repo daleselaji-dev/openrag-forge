@@ -1,52 +1,70 @@
-// 顶栏：品牌、知识库选择/创建、健康状态、导入与下载入口
-
-import type { Health, KnowledgeBase } from '../types'
+import type { Health, WorkbenchMode } from '../types'
 
 type Props = {
   health: Health | null
-  knowledgeBases: KnowledgeBase[]
-  kbId: string
-  onKbChange: (kbId: string) => void
-  onCreateKb: () => void
-  onOpenImports: () => void
-  onOpenDownload: () => void
+  mode: WorkbenchMode
+  onSetMode: (mode: WorkbenchMode) => void
   onRefresh: () => void
 }
 
-function HealthChip({ label, status, title }: { label: string; status: string; title?: string }) {
-  const tone = status === 'ready' ? 'ok' : status === 'not_initialized' ? 'warn' : 'down'
-  return <span className={`health-chip ${tone}`} title={title || status}>{label}: {status}</span>
-}
+const MODES: { id: WorkbenchMode; label: string; title: string }[] = [
+  { id: 'work', label: '工作台', title: '干净的 Control Room：无教学与讲解噪声' },
+  { id: 'teach', label: '辅助教学', title: '7 步操作课：怎么用这个工作台' },
+  { id: 'interview', label: '面试讲解', title: 'RAG 设计课：历程 / 方案对比 / 环节地图 / 向量库专章 / 实验手册' },
+]
 
-export function TopBar({ health, knowledgeBases, kbId, onKbChange, onCreateKb, onOpenImports, onOpenDownload, onRefresh }: Props) {
+export default function TopBar({ health, mode, onSetMode, onRefresh }: Props) {
+  const warnings = health?.production_readiness?.warnings || []
   return (
-    <header className="topbar" role="banner">
+    <header className="topbar">
       <div className="brand">
-        <b>OpenRAG Forge</b>
-        <span>装配工作台 · 可拆 / 可跑 / 可证明</span>
+        <span className="brand-mark">◈</span>
+        <div>
+          <b>OPENRAG FORGE</b>
+          <small>CONTROL ROOM · 可拆 · 可跑 · 可证明</small>
+        </div>
       </div>
-      <div className="topbar-controls">
-        <label className="kb-select">知识库
-          <select value={kbId} onChange={(event) => onKbChange(event.target.value)} aria-label="选择知识库">
-            {knowledgeBases.map((kb) => <option key={kb.knowledge_base_id} value={kb.knowledge_base_id}>{kb.name}</option>)}
-          </select>
-        </label>
-        <button className="ghost small" onClick={onCreateKb}>+ 新建</button>
-      </div>
-      <div className="topbar-health">
-        {health && (
-          <>
-            <span className="health-chip ok" title={`truth source: ${health.truth_source}`}>truth: sqlite</span>
-            <HealthChip label="qdrant" status={health.qdrant.status} title={health.qdrant.error || health.qdrant.url} />
-            <HealthChip label="模型服务" status={health.lm_studio.status} title={health.lm_studio.error || health.lm_studio.chat_base_url} />
-            <span className="health-chip neutral">{health.documents} 文档</span>
-          </>
+      <div className="status-chips">
+        <span className="status-chip-item" title="能力档位">
+          <small>PROFILE</small><b>{health?.profile || '…'}</b>
+        </span>
+        <span className="status-chip-item" title="部署环境">
+          <small>ENV</small><b>{health?.environment || '…'}</b>
+        </span>
+        <span className="status-chip-item" title="真相源存储">
+          <small>TRUTH</small><b>{health?.truth_source || '…'}</b>
+        </span>
+        <span className="status-chip-item" title="知识库文档数">
+          <small>DOCS</small><b>{health?.documents ?? '…'}</b>
+        </span>
+        <span className={`status-chip-item ${health?.qdrant?.status === 'ready' ? 'good' : 'warn'}`} title="Qdrant 派生索引状态">
+          <small>QDRANT</small><b>{health?.qdrant?.status || '…'}</b>
+        </span>
+        <span className={`status-chip-item ${health?.lm_studio?.status === 'ready' ? 'good' : 'warn'}`} title="OpenAI 兼容模型端点状态">
+          <small>MODEL</small><b>{health?.lm_studio?.status || '…'}</b>
+        </span>
+        {warnings.length > 0 && (
+          <span className="status-chip-item bad" title={warnings.join('\n')}>
+            <small>READINESS</small><b>{warnings.length} 项告警</b>
+          </span>
         )}
-        <button className="ghost small" onClick={onRefresh} title="刷新健康状态">刷新</button>
       </div>
       <div className="topbar-actions">
-        <button className="ghost" onClick={onOpenImports}>导入 API / 模型 / Recipe</button>
-        <button className="ghost" onClick={onOpenDownload}>下载 / 自托管</button>
+        <button className="ghost small" onClick={onRefresh}>刷新状态</button>
+        <div className="mode-switch" role="tablist" aria-label="工作台模式">
+          {MODES.map((item) => (
+            <button
+              key={item.id}
+              role="tab"
+              aria-selected={mode === item.id}
+              className={`mode-switch-btn${mode === item.id ? ' active' : ''}${item.id === 'interview' ? ' interview' : ''}`}
+              title={item.title}
+              onClick={() => onSetMode(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
       </div>
     </header>
   )

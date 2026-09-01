@@ -22,6 +22,16 @@ class Store:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.config.db_path)
         connection.row_factory = sqlite3.Row
+        # 生产加固：FastAPI 把同步端点放进线程池并发执行，SQLite 默认的
+        # 回滚日志模式在"一写多读"下会频繁抛 "database is locked"。
+        # - WAL 模式允许读写并发（写者不阻塞读者）；
+        # - busy_timeout 让写锁竞争时等待重试而不是立即失败；
+        # - synchronous=NORMAL 在 WAL 下是安全性与写性能的推荐平衡点。
+        # 当并发写入超出单机 SQLite 能力时，就该切换 production profile 的
+        # PostgreSQL 适配器了——这也是 Store 被设计成可替换端口的原因。
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA busy_timeout=5000")
+        connection.execute("PRAGMA synchronous=NORMAL")
         return connection
 
     def _init_db(self) -> None:

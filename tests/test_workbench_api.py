@@ -16,15 +16,15 @@ def test_plugins_catalog_has_docs_runtime_and_tunables():
     with TestClient(app) as client:
         body = client.get("/api/v1/plugins").json()
         nodes = body["nodes"]
-        assert nodes["sparse_retrieve"]["runtime"] == "implemented"
-        assert nodes["graph_query"]["runtime"] == "stub"
-        assert nodes["reranker"]["runtime"] == "degradable"
+        assert nodes["sparse_retrieve"]["implemented"] == "live"
+        assert nodes["graph_query"]["implemented"] == "stub"
+        assert nodes["reranker"]["implemented"] == "fallback"
         for node_type, spec in nodes.items():
             assert spec["description"], node_type
-            assert "tunables" in spec and "config_defaults" in spec
-            assert spec["runtime"] in {"implemented", "degradable", "stub"}
-        chunker_tunables = {item["name"] for item in nodes["chunker"]["tunables"]}
-        assert {"max_chars", "overlap"} <= chunker_tunables
+            assert "config_defaults" in spec
+            assert spec["implemented"] in {"live", "fallback", "stub"}
+        chunker_schema = {field["key"] for field in nodes["chunker"]["config_schema"]}
+        assert {"max_chars", "overlap"} <= chunker_schema
 
 
 def test_upload_blocks_chunks_and_enrichment(tmp_path, monkeypatch):

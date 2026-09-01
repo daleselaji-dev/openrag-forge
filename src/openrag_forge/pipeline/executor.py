@@ -45,7 +45,8 @@ _SKIP_ON_CACHE_HIT = {
 
 
 def _redact(config: dict[str, Any]) -> dict[str, Any]:
-    return {key: ("***" if "api_key" in key or "token" in key else value) for key, value in config.items()}
+    secret_keys = {"api_key", "access_token", "bearer_token"}
+    return {key: ("***" if key in secret_keys or key.endswith("_api_key") else value) for key, value in config.items()}
 
 
 def _chunk_candidate(score: float, chunk: Chunk) -> Candidate:
@@ -97,6 +98,17 @@ class QueryExecutor:
     def _config(self, node: RecipeNode) -> dict[str, Any]:
         defaults = self.catalog.get(node.type, {}).get("config_defaults", {})
         return {**defaults, **(node.config or {})}
+
+    def _record(self, node: RecipeNode, status: str, summary: str, impact: dict[str, Any], *, started: float | None = None, execution: str = "live", **compat: Any) -> None:
+        details: dict[str, Any] = {"node_type": node.type, "execution": execution, "impact": impact, **compat}
+        for key in ("backend", "top_k", "temperature", "max_tokens", "provider", "candidate_count", "cache", "preview"):
+            if key in impact:
+                details[key] = impact[key]
+        config_used = impact.get("config_used") or {}
+        for key in ("top_k", "temperature", "max_tokens"):
+            if key in config_used:
+                details[key] = config_used[key]
+        self.recorder.record(node.id, status, summary, details, started=started)
 
     def _topological(self) -> list[RecipeNode]:
         nodes = {node.id: node for node in self.recipe.nodes}
@@ -226,19 +238,19 @@ class QueryExecutor:
             config = self._config(node)
             started = time.perf_counter()
             if self.short_circuit and node.type in _SKIP_ON_CACHE_HIT:
-                self.recorder.record(node.id, "skipped", f"{self.short_circuit} 短路，节点未执行", {"impact": {"skipped_reason": self.short_circuit}})
+                self._record(node, "skipped", f"{self.short_circuit} 短路，节点未执行", {"skipped_reason": self.short_circuit}, started=started, execution="stub_passthrough")
                 continue
             if self.short_circuit == "rate_limited" and node.type not in {"rate_limit"}:
-                self.recorder.record(node.id, "skipped", "限流短路，节点未执行", {"impact": {"skipped_reason": "rate_limited"}})
+                self._record(node, "skipped", "限流短路，节点未执行", {"skipped_reason": "rate_limited"}, started=started, execution="stub_passthrough")
                 continue
             handler = getattr(self, f"_run_{node.type}", None)
             if handler is None:
-                self.recorder.record(node.id, "completed", f"{node.type} 已执行", {"impact": {"node_type": node.type}}, started=started)
+                self._record(node, "completed", f"{node.type} 已执行", {"node_type": node.type}, started=started, execution="live")
                 continue
             try:
                 handler(node, config, started)
             except Exception as exc:
-                self.recorder.record(node.id, "failed", f"节点执行失败：{exc}", {"impact": {"error": str(exc)[:300], "error_type": type(exc).__name__}}, started=started)
+                self._record(node, "failed", f"节点执行失败：{exc}", {"error": str(exc)[:300], "error_type": type(exc).__name__}, started=started, execution="failed")
         self._write_cache_if_needed()
 
     # ---------- 节点处理器 ----------
@@ -252,10 +264,10 @@ class QueryExecutor:
             self.short_circuit = "rate_limited"
             self.safety["rate_limited"] = True
             self.answer = f"当前 Recipe 已达到 {rpm} 次/分钟限流，稍后再试。真相源与索引未受影响。"
-            self.recorder.record(node.id, "failed", f"限流触发：{rpm}/min 已用尽", {"impact": {"requests_per_minute": rpm, "remaining": 0, "next_action": "等待窗口滑动后重试"}}, started=started)
+            self._record(node, "failed", f"限流触发：{rpm}/min 已用尽", {"requests_per_minute": rpm, "remaining": 0, "next_action": "等待窗口滑动后重试"}, started=started, execution="failed")
             return
         window.append(now)
-        self.recorder.record(node.id, "completed", "限流检查通过", {"impact": {"requests_per_minute": rpm, "remaining": rpm - len(window), "config_used": _redact(config)}}, started=started)
+        self._record(node, "completed", "限流检查通过", {"requests_per_minute": rpm, "remaining": rpm - len(window), "config_used": _redact(config)}, started=started, execution="live")
 
     def _run_cache(self, node: RecipeNode, config: dict[str, Any], started: float) -> None:
         ttl = int(config.get("ttl_seconds", 300))
@@ -269,10 +281,10 @@ class QueryExecutor:
             self.answer = entry["answer"]
             self.evidence = entry["evidence"]
             self.provider = "cache"
-            self.recorder.record(node.id, "completed", "缓存命中，复用上次结果", {"impact": {"cache": "hit", "age_seconds": round(now - entry["stored_at"], 1), "ttl_seconds": ttl, "evidence_count": len(self.evidence)}}, started=started)
+            self._record(node, "completed", "缓存命中，复用上次结果", {"cache": "hit", "age_seconds": round(now - entry["stored_at"], 1), "ttl_seconds": ttl, "evidence_count": len(self.evidence)}, started=started, execution="live")
             return
         self.cache_write_config = {"key": key, "ttl": ttl}
-        self.recorder.record(node.id, "completed", "缓存未命中，继续执行链路", {"impact": {"cache": "miss", "ttl_seconds": ttl}}, started=started)
+        self._record(node, "completed", "缓存未命中，继续执行链路", {"cache": "miss", "ttl_seconds": ttl}, started=started, execution="live")
 
     def _write_cache_if_needed(self) -> None:
         if self.cache_write_config and self.answer and not self.short_circuit:
@@ -285,7 +297,7 @@ class QueryExecutor:
     def _run_question(self, node: RecipeNode, config: dict[str, Any], started: float) -> None:
         tokens = tokenize(self.question)
         self.node_outputs[node.id] = {"query": self.question}
-        self.recorder.record(node.id, "completed", f"接收问题（{len(tokens)} tokens）", {"impact": {"token_count": len(tokens), "question_preview": self.question[:120]}}, started=started)
+        self._record(node, "completed", f"接收问题（{len(tokens)} tokens）", {"token_count": len(tokens), "question_preview": self.question[:120]}, started=started)
 
     def _run_intent_router(self, node: RecipeNode, config: dict[str, Any], started: float) -> None:
         normalized = self.question.lower()
@@ -298,7 +310,7 @@ class QueryExecutor:
         else:
             intent = "factual"
         self.node_outputs[node.id] = {"query": self.question}
-        self.recorder.record(node.id, "completed", f"意图判定：{intent}", {"impact": {"intent": intent, "method": "heuristic_rules"}}, started=started)
+        self._record(node, "completed", f"意图判定：{intent}", {"intent": intent, "method": "heuristic_rules"}, started=started, execution="live")
 
     def _run_metadata_filter(self, node: RecipeNode, config: dict[str, Any], started: float) -> None:
         fields: dict[str, Any] = config.get("fields") or {}
@@ -312,19 +324,20 @@ class QueryExecutor:
                 self.pool = filtered
         impact["pool_after"] = len(self.pool)
         self.node_outputs[node.id] = {"query": self.question}
-        self.recorder.record(node.id, "completed", f"Metadata 过滤：候选池 {before} → {len(self.pool)}", {"impact": impact}, started=started)
+        self._record(node, "completed", f"Metadata 过滤：候选池 {before} → {len(self.pool)}", impact, started=started)
 
     def _run_dense_retrieve(self, node: RecipeNode, config: dict[str, Any], started: float) -> None:
         candidates, backend, detail = self._dense(self.question, config)
         self.node_outputs[node.id] = {"candidates": candidates}
         if not self.evidence:
             self.evidence = self._as_evidence(candidates)
-        self.recorder.record(node.id, "completed", f"Dense 召回 {len(candidates)} 条候选（backend={backend}）", {"impact": {"candidate_count": len(candidates), "backend": backend, "top_chunk_ids": [item["chunk_id"] for item in candidates[:3]], "config_used": _redact(config), **detail}}, started=started)
+        impact = {"candidate_count": len(candidates), "backend": backend, "top_chunk_ids": [item["chunk_id"] for item in candidates[:3]], "config_used": _redact(config), **detail}
+        self._record(node, "completed", f"Dense 召回 {len(candidates)} 条候选（backend={backend}）", impact, started=started, execution="live" if backend == "qdrant_dense" else "fallback_lexical")
 
     def _run_sparse_retrieve(self, node: RecipeNode, config: dict[str, Any], started: float) -> None:
         candidates, backend, detail = self._sparse(self.question, config)
         self.node_outputs[node.id] = {"candidates": candidates}
-        self.recorder.record(node.id, "completed", f"Sparse/BM25 召回 {len(candidates)} 条候选（backend={backend}）", {"impact": {"candidate_count": len(candidates), "backend": backend, "top_chunk_ids": [item["chunk_id"] for item in candidates[:3]], "config_used": _redact(config), **detail}}, started=started)
+        self._record(node, "completed", f"Sparse/BM25 召回 {len(candidates)} 条候选（backend={backend}）", {"candidate_count": len(candidates), "backend": backend, "top_chunk_ids": [item["chunk_id"] for item in candidates[:3]], "config_used": _redact(config), **detail}, started=started, execution="live")
 
     def _run_rrf_fusion(self, node: RecipeNode, config: dict[str, Any], started: float) -> None:
         lists = [value for value in self._inputs(node.id, "candidates") if isinstance(value, list)]
@@ -342,18 +355,18 @@ class QueryExecutor:
         self.node_outputs[node.id] = {"candidates": fused}
         if fused:
             self.evidence = self._as_evidence(fused)
-        self.recorder.record(node.id, "completed", note, {"impact": impact}, started=started)
+        self._record(node, "completed", note, impact, started=started)
 
     def _run_pdf_page_retrieve(self, node: RecipeNode, config: dict[str, Any], started: float) -> None:
         pages = [chunk for chunk in self.pool if str(chunk.metadata.get("block_type")) == "page"]
         scored = bm25_rank(self.question, pages, int(config.get("top_k", 3)))
         candidates = [_chunk_candidate(score, chunk) for score, chunk in scored]
         self.node_outputs[node.id] = {"evidence": self._as_evidence(candidates, len(candidates))}
-        self.recorder.record(node.id, "completed", f"PDF 页级检索命中 {len(candidates)} 页（候选页 {len(pages)}）", {"impact": {"page_pool": len(pages), "candidate_count": len(candidates), "backend": "bm25_local_page", "pages": [item.get("metadata", {}).get("page") for item in candidates]}}, started=started)
+        self._record(node, "completed", f"PDF 页级检索命中 {len(candidates)} 页（候选页 {len(pages)}）", {"page_pool": len(pages), "candidate_count": len(candidates), "backend": "bm25_local_page", "pages": [item.get("metadata", {}).get("page") for item in candidates]}, started=started, execution="live")
 
     def _run_graph_query(self, node: RecipeNode, config: dict[str, Any], started: float) -> None:
         self.node_outputs[node.id] = {"evidence": []}
-        self.recorder.record(node.id, "skipped", "compile-complete / runtime-stub：Neo4j 图谱后端未实现，未产出证据", {"impact": {"runtime": "stub", "skipped_reason": "graph_backend_not_implemented", "next_action": "安装 graph profile 并接入 Neo4j 后启用"}}, started=started)
+        self._record(node, "skipped", "compile-complete / runtime-stub：Neo4j 图谱后端未实现，未产出证据", {"runtime": "stub", "skipped_reason": "graph_backend_not_implemented", "next_action": "安装 graph profile 并接入 Neo4j 后启用"}, started=started, execution="stub_passthrough")
 
     def _run_reranker(self, node: RecipeNode, config: dict[str, Any], started: float) -> None:
         candidates_lists = [value for value in self._inputs(node.id, "candidates") if isinstance(value, list)]
@@ -395,7 +408,7 @@ class QueryExecutor:
         if backend == "passthrough":
             impact["passthrough_reason"] = reason or "reranker 后端不可用"
         summary = f"重排 {len(candidates)} → {len(final)} 条证据（backend={backend}）" if backend != "passthrough" else f"重排后端不可用，如实直通 {len(final)} 条（未发生真实重排）"
-        self.recorder.record(node.id, "completed", summary, {"impact": impact}, started=started)
+        self._record(node, "completed", summary, impact, started=started, execution="live" if backend != "passthrough" else "fallback_extractive")
 
     def _run_evidence_grade(self, node: RecipeNode, config: dict[str, Any], started: float) -> None:
         inputs = [value for port in ("candidates", "evidence") for value in self._inputs(node.id, port) if isinstance(value, list)]
@@ -406,7 +419,7 @@ class QueryExecutor:
         sufficient = len(items) >= min_evidence and top_score >= min_top_score
         decision = {"sufficient": sufficient, "evidence_count": len(items), "top_score": round(top_score, 4), "min_evidence": min_evidence, "min_top_score": min_top_score}
         self.node_outputs[node.id] = {"decision": decision}
-        self.recorder.record(node.id, "completed", f"证据判定：{'sufficient' if sufficient else 'insufficient'}（{len(items)} 条，top={round(top_score, 3)}）", {"impact": {"decision": decision}}, started=started)
+        self._record(node, "completed", f"证据判定：{'sufficient' if sufficient else 'insufficient'}（{len(items)} 条，top={round(top_score, 3)}）", {"decision": decision}, started=started)
 
     def _run_bounded_corrective(self, node: RecipeNode, config: dict[str, Any], started: float) -> None:
         decisions = self._inputs(node.id, "decision")
@@ -414,7 +427,7 @@ class QueryExecutor:
         max_retries = min(int(config.get("max_retries", 1)), 2)
         self.node_outputs[node.id] = {"query": self.question}
         if decision.get("sufficient", True):
-            self.recorder.record(node.id, "completed", "证据充足，无需纠错重试", {"impact": {"retries_used": 0, "max_retries": max_retries, "triggered": False}}, started=started)
+            self._record(node, "completed", "证据充足，无需纠错重试", {"retries_used": 0, "max_retries": max_retries, "triggered": False}, started=started, execution="live")
             return
         variant = str(config.get("query_variant", "domain_term_expansion"))
         before = len(self.evidence)
@@ -430,7 +443,7 @@ class QueryExecutor:
                 self.evidence = self._as_evidence(fused)
                 break
         impact = {"triggered": True, "retries_used": retries_used, "max_retries": max_retries, "query_variant": variant, "candidates_before": before, "candidates_after": len(self.corrected or []) or before, "improved": self.corrected is not None}
-        self.recorder.record(node.id, "completed", f"有限纠错：重试 {retries_used} 次，候选 {before} → {impact['candidates_after']}", {"impact": impact}, started=started)
+        self._record(node, "completed", f"有限纠错：重试 {retries_used} 次，候选 {before} → {impact['candidates_after']}", impact, started=started)
 
     def _run_parent_expansion(self, node: RecipeNode, config: dict[str, Any], started: float) -> None:
         window = min(int(config.get("window", 1)), 3)
@@ -461,7 +474,7 @@ class QueryExecutor:
                 updated.append(item)
         self.evidence = updated
         self.node_outputs[node.id] = {"evidence": updated}
-        self.recorder.record(node.id, "completed", f"父子块扩展：{expanded_count}/{len(updated)} 条证据补充了相邻上下文", {"impact": {"expanded_count": expanded_count, "evidence_count": len(updated), "window": window, "max_chars_per_side": max_side}}, started=started)
+        self._record(node, "completed", f"父子块扩展：{expanded_count}/{len(updated)} 条证据补充了相邻上下文", {"expanded_count": expanded_count, "evidence_count": len(updated), "window": window, "max_chars_per_side": max_side}, started=started, execution="live")
 
     def _run_context_builder(self, node: RecipeNode, config: dict[str, Any], started: float) -> None:
         merged: list[Candidate] = []
@@ -508,7 +521,7 @@ class QueryExecutor:
         self.evidence = self._as_evidence(kept, len(kept))
         context = "\n\n".join(f"[{item.citation}] {item.text}" for item in self.evidence)
         self.node_outputs[node.id] = {"context": context, "evidence": self.evidence}
-        self.recorder.record(node.id, "completed", f"上下文构建：保留 {len(kept)} 条证据（去重丢弃 {dropped_dupe}，超预算丢弃 {dropped_budget}）", {"impact": {"evidence_count": len(kept), "evidence_ids": [item.chunk_id for item in self.evidence], "citations": [item.citation for item in self.evidence], "dropped_duplicates": dropped_dupe, "dropped_over_budget": dropped_budget, "budget_chars": budget_chars, "context_chars": used, "config_used": _redact(config)}}, started=started)
+        self._record(node, "completed", f"上下文构建：保留 {len(kept)} 条证据（去重丢弃 {dropped_dupe}，超预算丢弃 {dropped_budget}）", {"evidence_count": len(kept), "evidence_ids": [item.chunk_id for item in self.evidence], "citations": [item.citation for item in self.evidence], "dropped_duplicates": dropped_dupe, "dropped_over_budget": dropped_budget, "budget_chars": budget_chars, "context_chars": used, "config_used": _redact(config)}, started=started, execution="live")
 
     def _run_llm_generate(self, node: RecipeNode, config: dict[str, Any], started: float) -> None:
         profile = self.resolve_model(str(config.get("model_ref", "")))
@@ -527,7 +540,9 @@ class QueryExecutor:
         self.answer = answer
         self.provider = provider
         self.node_outputs[node.id] = {"answer": answer}
-        self.recorder.record(node.id, "completed", f"生成受证据约束的回答（provider={provider}）", {"impact": {"provider": provider, "citation_count": len(self.evidence), "citation_repaired": repaired, "answer_chars": len(answer), "model_ref": str(config.get("model_ref", "")) or None, "config_used": _redact(config)}}, started=started)
+        impact = {"provider": provider, "citation_count": len(self.evidence), "citation_repaired": repaired, "answer_chars": len(answer), "model_ref": str(config.get("model_ref", "")) or None, "config_used": _redact(config)}
+        execution = "live" if provider == "openai_compatible_chat" else "fallback_extractive"
+        self._record(node, "completed", f"生成受证据约束的回答（provider={provider}）", impact, started=started, execution=execution)
 
     def _run_policy_gate(self, node: RecipeNode, config: dict[str, Any], started: float) -> None:
         require_citation = bool(config.get("require_citation", True))
@@ -539,7 +554,7 @@ class QueryExecutor:
         if invalid:
             self.safety["invalid_citations"] = invalid
         self.node_outputs[node.id] = {"decision": {"human_review": human_review, "invalid_citations": invalid}}
-        self.recorder.record(node.id, "completed", "安全策略通过；未发现外部副作用动作" if not invalid else f"发现无效引用 {invalid}，已标记人工复核", {"impact": {"human_review": human_review, "require_citation": require_citation, "citations_in_answer": sorted(cited), "invalid_citations": invalid, "evidence_count": len(self.evidence)}}, started=started)
+        self._record(node, "completed", "安全策略通过；未发现外部副作用动作" if not invalid else f"发现无效引用 {invalid}，已标记人工复核", {"human_review": human_review, "require_citation": require_citation, "citations_in_answer": sorted(cited), "invalid_citations": invalid, "evidence_count": len(self.evidence)}, started=started, execution="live")
 
     def _run_build_ticket_draft(self, node: RecipeNode, config: dict[str, Any], started: float) -> None:
         normalized = self.question.lower()
@@ -558,8 +573,8 @@ class QueryExecutor:
         self.answer = f"已生成客服工单草稿，仍缺少字段：{', '.join(missing) if missing else '无'}。草稿必须经过人工审批。"
         self.safety["human_review"] = True
         self.node_outputs[node.id] = {"artifact": self.artifact}
-        self.recorder.record(node.id, "completed", "生成结构化工单草稿，未执行外部动作", {"impact": {"missing_fields": missing, "approval_required": True, "evidence_ids": [item.citation for item in self.evidence], "forbidden_actions": self.artifact["forbidden_actions"]}}, started=started)
+        self._record(node, "completed", "生成结构化工单草稿，未执行外部动作", {"missing_fields": missing, "approval_required": True, "evidence_ids": [item.citation for item in self.evidence], "forbidden_actions": self.artifact["forbidden_actions"]}, started=started, execution="live")
 
     def _run_approval(self, node: RecipeNode, config: dict[str, Any], started: float) -> None:
         self.node_outputs[node.id] = {"artifact": self.artifact}
-        self.recorder.record(node.id, "completed", "停在人工审批门", {"impact": {"approval_required": True, "side_effects": False}}, started=started)
+        self._record(node, "completed", "停在人工审批门", {"approval_required": True, "side_effects": False}, started=started, execution="live")

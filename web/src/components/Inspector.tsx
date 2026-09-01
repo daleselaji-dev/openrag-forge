@@ -1,195 +1,240 @@
-// 右侧检查器：始终回答三个问题 —— 这个节点的 Trace 与影响是什么、这个 Block 是干什么的、怎么调配
-
 import { useEffect, useMemo, useState } from 'react'
-import { RUNTIME_LABELS } from '../catalog'
-import type { ModelProfile, Plugin, Recipe, TraceEvent, Tunable } from '../types'
-import { TraceList } from './TraceList'
+import type { CatalogNode, ConfigField, ModelProfile, Recipe, Run, RunMeta, TraceEvent } from '../types'
+import { fmtMs, GROUP_LABELS, shortHash, STATUS_LABELS } from '../format'
+import { EXECUTION_LABELS, IMPLEMENTED_LABELS } from '../teach'
+import { STAGE_LESSONS } from '../interview'
+import InterviewLessonCard from './InterviewLessonCard'
 
 type Props = {
   recipe: Recipe | null
-  plugins: Record<string, Plugin>
-  models: ModelProfile[]
   selectedNodeId: string | null
-  trace: TraceEvent[]
-  onApplyConfig: (nodeId: string, config: Record<string, unknown>) => void
-  onSelectNode: (nodeId: string) => void
+  catalog: Record<string, CatalogNode>
+  models: ModelProfile[]
+  run: Run | null
+  runMeta: RunMeta | null
+  teachOn: boolean
+  interviewOn: boolean
+  coachActive: boolean
+  dirty: boolean
+  onUpdateNodeConfig: (nodeId: string, config: Record<string, unknown>) => void
+  onDeleteNode: (nodeId: string) => void
 }
 
-function TunableField({ tunable, value, models, onChange }: { tunable: Tunable; value: unknown; models: ModelProfile[]; onChange: (value: unknown) => void }) {
-  const id = `knob-${tunable.name}`
-  if (tunable.type === 'model') {
-    const options = models.filter((model) => !tunable.kind || model.kind === tunable.kind)
+function FieldInput({ field, value, models, onChange }: { field: ConfigField; value: unknown; models: ModelProfile[]; onChange: (key: string, value: unknown) => void }) {
+  if (field.type === 'number') {
     return (
-      <label className="knob" htmlFor={id}>
-        <span>{tunable.name}<em title={tunable.description}>ⓘ</em></span>
-        <select id={id} value={String(value ?? '')} onChange={(event) => onChange(event.target.value || undefined)}>
-          <option value="">默认 / 不绑定</option>
-          {options.map((model) => <option key={model.model_id} value={model.model_id}>{model.display_name} · {model.kind}</option>)}
-        </select>
-      </label>
+      <input
+        type="number"
+        min={field.min}
+        max={field.max}
+        step={field.step}
+        value={value === undefined || value === null ? '' : String(value)}
+        onChange={(event) => {
+          const raw = event.target.value
+          if (raw === '') return
+          const parsed = Number(raw)
+          if (!Number.isNaN(parsed)) onChange(field.key, parsed)
+        }}
+      />
     )
   }
-  if (tunable.type === 'enum') {
+  if (field.type === 'select') {
     return (
-      <label className="knob" htmlFor={id}>
-        <span>{tunable.name}<em title={tunable.description}>ⓘ</em></span>
-        <select id={id} value={String(value ?? tunable.options?.[0] ?? '')} onChange={(event) => onChange(event.target.value)}>
-          {tunable.options?.map((option) => <option key={option} value={option}>{option}</option>)}
-        </select>
-      </label>
+      <select value={String(value ?? '')} onChange={(event) => onChange(field.key, event.target.value)}>
+        {(field.options || []).map((option) => (
+          <option key={option} value={option}>{option}</option>
+        ))}
+      </select>
     )
   }
-  if (tunable.type === 'bool') {
+  if (field.type === 'boolean') {
     return (
-      <label className="knob knob-bool" htmlFor={id}>
-        <input id={id} type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />
-        <span>{tunable.name}<em title={tunable.description}>ⓘ</em></span>
-      </label>
+      <input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(field.key, event.target.checked)} />
     )
   }
-  if (tunable.type === 'int' || tunable.type === 'float') {
+  if (field.type === 'model') {
+    const candidates = models.filter((model) => !field.model_kind || model.kind === field.model_kind)
     return (
-      <label className="knob" htmlFor={id}>
-        <span>{tunable.name}<em title={tunable.description}>ⓘ</em>{tunable.min !== undefined && <small>{tunable.min}–{tunable.max}</small>}</span>
-        <input
-          id={id} type="number" step={tunable.type === 'float' ? 0.05 : 1} min={tunable.min} max={tunable.max}
-          value={value === undefined || value === null ? '' : Number(value)}
-          onChange={(event) => onChange(event.target.value === '' ? undefined : Number(event.target.value))}
-        />
-      </label>
+      <select value={String(value ?? '')} onChange={(event) => onChange(field.key, event.target.value)}>
+        <option value="">未绑定 / 使用默认</option>
+        {candidates.map((model) => (
+          <option key={model.model_id} value={model.model_id}>{model.display_name} · {model.kind}</option>
+        ))}
+      </select>
     )
   }
-  if (tunable.type === 'json') {
-    return (
-      <label className="knob knob-json" htmlFor={id}>
-        <span>{tunable.name}<em title={tunable.description}>ⓘ</em></span>
-        <textarea
-          id={id}
-          value={typeof value === 'string' ? value : JSON.stringify(value ?? (tunable.name === 'weights' ? [1, 1] : {}), null, 0)}
-          onChange={(event) => { try { onChange(JSON.parse(event.target.value)) } catch { onChange(event.target.value) } }}
-        />
-      </label>
-    )
-  }
+  return <input type="text" value={String(value ?? '')} onChange={(event) => onChange(field.key, event.target.value)} />
+}
+
+function NodeTrace({ events, preview }: { events: TraceEvent[]; preview: boolean }) {
+  if (!events.length) return null
   return (
-    <label className="knob" htmlFor={id}>
-      <span>{tunable.name}<em title={tunable.description}>ⓘ</em></span>
-      <input id={id} type="text" value={String(value ?? '')} onChange={(event) => onChange(event.target.value || undefined)} />
-    </label>
+    <section className="inspector-section">
+      <h4>本节点最近一次{preview ? ' Preview' : '运行'}</h4>
+      {events.map((event) => {
+        const execution = EXECUTION_LABELS[String(event.details?.execution || '')]
+        return (
+          <div key={event.sequence} className={`node-trace-card ${event.status}`}>
+            <div className="node-trace-head">
+              <span className={`status-chip ${event.status}`}>{STATUS_LABELS[event.status] || event.status}</span>
+              {execution && <span className={`exec-chip ${execution.tone}`}>{execution.label}</span>}
+              <em>{fmtMs(event.duration_ms)}</em>
+            </div>
+            <p>{event.summary}</p>
+            <details>
+              <summary>输入 / 输出细节</summary>
+              <pre>{JSON.stringify(event.details, null, 2)}</pre>
+            </details>
+          </div>
+        )
+      })}
+    </section>
   )
 }
 
-export function Inspector({ recipe, plugins, models, selectedNodeId, trace, onApplyConfig, onSelectNode }: Props) {
-  const [tab, setTab] = useState<'config' | 'block' | 'trace'>('config')
-  const [draftConfig, setDraftConfig] = useState<Record<string, unknown>>({})
-  const [rawMode, setRawMode] = useState(false)
-  const [rawText, setRawText] = useState('{}')
-  const [dirty, setDirty] = useState(false)
-
+export default function Inspector({ recipe, selectedNodeId, catalog, models, run, runMeta, teachOn, interviewOn, coachActive, dirty, onUpdateNodeConfig, onDeleteNode }: Props) {
   const node = recipe?.nodes.find((item) => item.id === selectedNodeId) || null
-  const plugin = node ? plugins[node.type] : null
-  const nodeTrace = useMemo(() => trace.filter((event) => event.node_id === selectedNodeId), [trace, selectedNodeId])
+  const spec = node ? catalog[node.type] : null
+  const [advanced, setAdvanced] = useState(false)
+  const [jsonText, setJsonText] = useState('{}')
+  const [jsonError, setJsonError] = useState<string | null>(null)
 
   useEffect(() => {
-    const config = node?.config || {}
-    setDraftConfig(config)
-    setRawText(JSON.stringify(config, null, 2))
-    setDirty(false)
+    setAdvanced(false)
+    setJsonError(null)
+    setJsonText(JSON.stringify(node?.config || {}, null, 2))
   }, [selectedNodeId, recipe?.recipe_id])
 
-  const effectiveDefaults = plugin?.config_defaults || {}
+  useEffect(() => {
+    if (!advanced) setJsonText(JSON.stringify(node?.config || {}, null, 2))
+  }, [node?.config, advanced])
 
-  const applyKnob = (name: string, value: unknown) => {
-    setDraftConfig((config) => {
-      const next = { ...config }
-      if (value === undefined) delete next[name]
-      else next[name] = value
-      setRawText(JSON.stringify(next, null, 2))
-      return next
-    })
-    setDirty(true)
-  }
+  const nodeEvents = useMemo(() => (run && selectedNodeId ? run.trace.filter((event) => event.node_id === selectedNodeId) : []), [run, selectedNodeId])
 
-  const apply = () => {
+  const stubCount = useMemo(() => (recipe ? recipe.nodes.filter((item) => catalog[item.type]?.implemented !== 'live').length : 0), [recipe, catalog])
+
+  const applyField = (key: string, value: unknown) => {
     if (!node) return
-    let config = draftConfig
-    if (rawMode) {
-      try { config = JSON.parse(rawText) } catch { return alert('原始 JSON 配置不合法') }
-    }
-    onApplyConfig(node.id, config)
-    setDirty(false)
+    onUpdateNodeConfig(node.id, { ...(node.config || {}), [key]: value })
   }
+
+  const applyJson = () => {
+    if (!node) return
+    try {
+      const parsed = JSON.parse(jsonText) as Record<string, unknown>
+      setJsonError(null)
+      onUpdateNodeConfig(node.id, parsed)
+    } catch {
+      setJsonError('不是合法 JSON，未应用。')
+    }
+  }
+
+  if (!recipe) {
+    return <aside className={`inspector${coachActive ? ' coach-pulse' : ''}`}><p className="muted">先选择一个 Recipe。</p></aside>
+  }
+
+  if (!node || !spec) {
+    return (
+      <aside className={`inspector${coachActive ? ' coach-pulse' : ''}`}>
+        <span className="eyebrow">RECIPE 概览</span>
+        <h3>{recipe.name}</h3>
+        <div className="kv-list">
+          <div><small>版本 / 状态</small><b>v{recipe.version} · {recipe.status}{dirty ? '（未保存）' : ''}</b></div>
+          <div><small>编译哈希</small><b className="mono">{shortHash(recipe.hash, 14)}</b></div>
+          <div><small>节点 / 连线</small><b>{recipe.nodes.length} / {recipe.edges.length}</b></div>
+        </div>
+        {stubCount > 0 && (
+          <p className="honesty-note">本 Recipe 含 {stubCount} 个占位/退化节点：它们出现在画布与 Trace 中，但尚未真正实现对应算法。点击节点查看诚实标注。</p>
+        )}
+        {run && runMeta && (
+          <div className="kv-list">
+            <div><small>最近一次{runMeta.mode === 'preview' ? ' Preview' : '运行'}</small><b className="mono">{run.run_id}</b></div>
+            <div><small>证据 / Trace</small><b>{run.evidence.length} 条证据 · {run.trace.length} 个事件</b></div>
+          </div>
+        )}
+        <p className="muted">点击画布节点查看端口、诚实标注与结构化配置表单。</p>
+        {teachOn && (
+          <div className="teach-card">
+            <b>教学 · 为什么是 DAG？</b>
+            <p>RAG 不是一根管道而是一张图：检索、融合、生成、安全门各自有类型化端口。编译器在保存时校验端口兼容与无环，保证画布上的结构就是运行时的结构。</p>
+          </div>
+        )}
+        {interviewOn && (
+          <div className="teach-card">
+            <b>面试讲解 · 从这里开始</b>
+            <p>点击画布任意节点，这里会显示该环节的产品规格级讲解（目的 / 影响 / 旋钮 / 动力 / live vs stub / 面试追问）+ 可改配置。也可以在左侧讲解面板的「环节地图」里点环节，会自动选中对应节点。</p>
+          </div>
+        )}
+      </aside>
+    )
+  }
+
+  const implemented = IMPLEMENTED_LABELS[spec.implemented]
+  const config = node.config || {}
+  const schemaKeys = new Set(spec.config_schema.map((field) => field.key))
+  const extraKeys = Object.keys(config).filter((key) => !schemaKeys.has(key))
 
   return (
-    <aside className="inspector" aria-label="节点检查器">
-      <div className="inspector-tabs" role="tablist">
-        <button role="tab" aria-selected={tab === 'config'} className={tab === 'config' ? 'active' : ''} onClick={() => setTab('config')}>调配</button>
-        <button role="tab" aria-selected={tab === 'block'} className={tab === 'block' ? 'active' : ''} onClick={() => setTab('block')}>Block 作用</button>
-        <button role="tab" aria-selected={tab === 'trace'} className={tab === 'trace' ? 'active' : ''} onClick={() => setTab('trace')}>Trace</button>
+    <aside className={`inspector${coachActive ? ' coach-pulse' : ''}`}>
+      <span className="eyebrow">节点检查器</span>
+      <div className="inspector-title">
+        <h3>{spec.title}</h3>
+        <span className={`impl-badge impl-${spec.implemented}`} title={implemented.note}>{implemented.label}</span>
       </div>
+      <p className="node-meta mono">{node.type} · {node.id} · {GROUP_LABELS[spec.group] || spec.group}</p>
+      <p className="execution-note">{spec.execution_note}</p>
+      <p className="port-line">
+        <span>入 {spec.inputs.length ? spec.inputs.join(' / ') : '—'}</span>
+        <span>出 {spec.outputs.length ? spec.outputs.join(' / ') : '—'}</span>
+      </p>
 
-      {!node && (
-        <div className="inspector-empty">
-          <p className="muted">点击画布上的节点，这里会显示：</p>
-          <ul className="muted">
-            <li><b>调配</b>：该节点全部可调参数（默认值、范围、模型绑定），应用后进入草稿。</li>
-            <li><b>Block 作用</b>：这个组件是什么、为什么存在、如何影响下游。</li>
-            <li><b>Trace</b>：最近一次运行中该节点的状态、耗时与实际影响。</li>
-          </ul>
-          <p className="muted">文档的 ParsedBlock 请在底部「文档 / Blocks」页查看。</p>
+      {teachOn && (spec.teach.what || spec.teach.tune || spec.teach.pitfalls) && (
+        <div className="teach-card">
+          <b>教学 · 这一步在 RAG 里做什么</b>
+          {spec.teach.what && <p>{spec.teach.what}</p>}
+          {spec.teach.tune && <p><i>怎么调：</i>{spec.teach.tune}</p>}
+          {spec.teach.pitfalls && <p><i>常见误区：</i>{spec.teach.pitfalls}</p>}
         </div>
       )}
 
-      {node && plugin && tab === 'config' && (
-        <div className="inspector-body">
-          <header className="inspector-node-head">
-            <h3>{plugin.title}</h3>
-            <code>{node.id}</code>
-            <span className={`runtime-tag ${plugin.runtime}`} title={RUNTIME_LABELS[plugin.runtime]?.hint}>{RUNTIME_LABELS[plugin.runtime]?.label}</span>
-          </header>
-          {plugin.tunables.length === 0 && <p className="muted">该节点没有运行期可调参数。它的行为由输入数据与图结构决定。</p>}
-          {!rawMode && plugin.tunables.map((tunable) => (
-            <TunableField
-              key={tunable.name}
-              tunable={tunable}
-              models={models}
-              value={draftConfig[tunable.name] ?? effectiveDefaults[tunable.name]}
-              onChange={(value) => applyKnob(tunable.name, value)}
-            />
-          ))}
-          {rawMode && (
-            <textarea className="node-config" value={rawText} onChange={(event) => { setRawText(event.target.value); setDirty(true) }} aria-label="原始 JSON 配置" />
-          )}
-          <div className="inspector-actions">
-            <button className="ghost small" onClick={() => setRawMode(!rawMode)}>{rawMode ? '结构化编辑' : '原始 JSON'}</button>
-            <button className="primary small" onClick={apply} disabled={!dirty}>{dirty ? '应用到草稿' : '已同步'}</button>
-          </div>
-          <p className="muted small-note">应用后 Recipe 变为 dirty 草稿；用画布上方的「保存草稿 → 校验 → 发布」流程固化为新的 recipe hash。默认值：<code>{JSON.stringify(effectiveDefaults)}</code></p>
-        </div>
+      {interviewOn && STAGE_LESSONS[node.type] && (
+        <section className="inspector-section">
+          <h4>面试讲解 · 环节规格</h4>
+          <InterviewLessonCard lesson={STAGE_LESSONS[node.type]} spec={spec} compact />
+        </section>
       )}
 
-      {node && plugin && tab === 'block' && (
-        <div className="inspector-body">
-          <header className="inspector-node-head">
-            <h3>{plugin.title}</h3>
-            <span className={`runtime-tag ${plugin.runtime}`}>{RUNTIME_LABELS[plugin.runtime]?.label}</span>
-          </header>
-          <dl className="block-doc">
-            <dt>它做什么</dt><dd>{plugin.description}</dd>
-            <dt>为什么存在</dt><dd>{plugin.why || '—'}</dd>
-            <dt>对下游的影响</dt><dd>{plugin.downstream || '—'}</dd>
-            <dt>输入端口</dt><dd>{plugin.inputs.length ? plugin.inputs.map((port) => <code key={port}>{port}</code>) : '（源节点）'}</dd>
-            <dt>输出端口</dt><dd>{plugin.outputs.map((port) => <code key={port}>{port}</code>)}</dd>
-            {plugin.runtime === 'stub' && <><dt>诚实声明</dt><dd className="stub-text">该节点是 compile-complete / runtime-stub：编译期端口类型完整，运行层暂无真实后端，执行时会在 Trace 中记录 skipped 而不是伪装产出。</dd></>}
-          </dl>
+      <section className="inspector-section">
+        <div className="section-head">
+          <h4>配置{dirty ? '（草稿未保存）' : ''}</h4>
+          <button className="link-btn" onClick={() => setAdvanced((current) => !current)}>{advanced ? '返回表单' : '高级 JSON'}</button>
         </div>
-      )}
+        {!advanced && spec.config_schema.length === 0 && <p className="muted">该节点没有可配置项。</p>}
+        {!advanced && spec.config_schema.map((field) => (
+          <label key={field.key} className={`config-field${field.effective === false ? ' ineffective' : ''}`}>
+            <span className="config-label">
+              {field.label}
+              {field.effective === false ? <em className="not-effective">不生效</em> : <em className="effective">生效</em>}
+            </span>
+            <FieldInput field={field} value={config[field.key] ?? spec.config_defaults[field.key]} models={models} onChange={applyField} />
+            {field.help && <small>{field.help}</small>}
+          </label>
+        ))}
+        {!advanced && extraKeys.length > 0 && <p className="muted">还有 {extraKeys.length} 个字段（{extraKeys.join(', ')}）仅在高级 JSON 中可编辑。</p>}
+        {advanced && (
+          <>
+            <textarea className="node-config" value={jsonText} onChange={(event) => setJsonText(event.target.value)} spellCheck={false} />
+            {jsonError && <p className="form-error">{jsonError}</p>}
+            <button className="ghost small" onClick={applyJson}>应用 JSON</button>
+          </>
+        )}
+      </section>
 
-      {node && tab === 'trace' && (
-        <div className="inspector-body">
-          <TraceList trace={nodeTrace} recipe={recipe} plugins={plugins} emptyText="该节点在最近一次运行中没有 Trace 事件。先运行 Preview 或真实链路。" onSelectNode={onSelectNode} />
-        </div>
-      )}
+      <NodeTrace events={nodeEvents} preview={runMeta?.mode === 'preview'} />
+
+      <section className="inspector-section">
+        <button className="danger-btn" onClick={() => onDeleteNode(node.id)}>删除节点（连带连线）</button>
+      </section>
     </aside>
   )
 }

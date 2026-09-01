@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openrag-forge"
-version = "0.1.0"
+version = "0.2.0"
 description = "A traceable, composable and lightweight RAG knowledge base framework."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -54,4 +54,18 @@ asyncio_mode = "auto"
 [tool.ruff]
 line-length = 110
 target-version = "py311"
+
+# 教学点：显式锁定 lint 规则集。若依赖 ruff 的默认值，工具升级会悄悄改变
+# CI 的通过标准；显式声明后规则变更必须经过代码评审。
+[tool.ruff.lint]
+select = [
+  "E4", "E7", "E9",  # pycodestyle 错误
+  "F",               # pyflakes（未使用导入/变量、未定义名称）
+  "I",               # import 排序
+  "UP",              # 过时语法升级建议
+  "B",               # flake8-bugbear（常见隐蔽 bug）
+]
+ignore = [
+  "B008",  # FastAPI 的 File()/Depends() 作为参数默认值是框架标准用法
+]
 

@@ -1,31 +1,36 @@
-// 与后端 Pydantic 模型对应的共享类型
+// 与后端 API 对齐的共享类型定义。
 
-export type Tunable = {
-  name: string
-  type: 'int' | 'float' | 'enum' | 'bool' | 'string' | 'json' | 'model'
+export type NodeImplemented = 'live' | 'fallback' | 'stub'
+
+export type ConfigField = {
+  key: string
+  label: string
+  type: 'number' | 'select' | 'text' | 'boolean' | 'model'
   min?: number
   max?: number
+  step?: number
   options?: string[]
-  kind?: 'chat' | 'embedding' | 'reranker'
-  description: string
+  model_kind?: 'chat' | 'embedding' | 'reranker'
+  effective?: boolean
+  help?: string
 }
 
-export type Plugin = {
+export type CatalogNode = {
   inputs: string[]
   outputs: string[]
   group: string
   bounded?: boolean
   title: string
-  runtime: 'implemented' | 'degradable' | 'stub'
+  implemented: NodeImplemented
+  execution_note: string
   description: string
-  why: string
-  downstream: string
-  tunables: Tunable[]
+  teach: { what?: string; tune?: string; pitfalls?: string }
   config_defaults: Record<string, unknown>
+  config_schema: ConfigField[]
 }
 
-export type RecipeNode = { id: string; type: string; label?: string; config?: Record<string, unknown> }
-export type RecipeEdge = { source: string; source_port: string; target: string; target_port: string }
+export type RecipeNodeDef = { id: string; type: string; label?: string | null; config?: Record<string, unknown> }
+export type RecipeEdgeDef = { source: string; source_port: string; target: string; target_port: string }
 
 export type Recipe = {
   recipe_id: string
@@ -33,21 +38,24 @@ export type Recipe = {
   version: string
   status: string
   hash: string | null
-  nodes: RecipeNode[]
-  edges: RecipeEdge[]
+  nodes: RecipeNodeDef[]
+  edges: RecipeEdgeDef[]
+  created_at?: string
 }
 
 export type TraceEvent = {
   run_id?: string
   node_id: string
   sequence: number
-  status: 'running' | 'completed' | 'failed' | 'skipped'
+  status: string
   summary: string
   duration_ms: number
-  details: Record<string, unknown> & { impact?: Record<string, unknown> }
+  details: Record<string, unknown>
+  otel_trace_id?: string | null
+  created_at?: string
 }
 
-export type EvidenceItem = {
+export type Evidence = {
   citation: string
   chunk_id: string
   document_id: string
@@ -64,56 +72,27 @@ export type Run = {
   status: string
   answer?: string | null
   artifact?: Record<string, unknown> | null
-  evidence: EvidenceItem[]
+  evidence: Evidence[]
   trace: TraceEvent[]
   safety: Record<string, unknown>
 }
 
-export type RunSummary = {
-  run_id: string
-  recipe_id: string
-  recipe_hash: string
-  status: string
-  answer_preview: string
-  evidence_count: number
-  trace_count: number
-  safety: Record<string, unknown>
-  created_at: string
+export type RunMeta = {
+  mode: 'preview' | 'run'
+  requestId: string | null
+  otelTraceId: string | null
+  finishedAt: number
 }
 
 export type DocumentInfo = {
   document_id: string
-  knowledge_base_id: string
   filename: string
-  media_type: string
-  size_bytes: number
-  sha256: string
   status: string
   parser_route?: string | null
   parser_confidence?: number | null
   reason_codes: string[]
+  size_bytes: number
   version: number
-  created_at: string
-}
-
-export type ParsedBlock = {
-  block_id: string
-  document_id: string
-  block_type: 'heading' | 'paragraph' | 'table' | 'row' | 'page' | 'code' | 'unknown'
-  text: string
-  order: number
-  page?: number | null
-  heading_path: string[]
-  metadata: Record<string, unknown>
-}
-
-export type ChunkInfo = {
-  chunk_id: string
-  document_id: string
-  text: string
-  order: number
-  block_ids: string[]
-  metadata: Record<string, unknown>
 }
 
 export type ModelProfile = {
@@ -125,7 +104,6 @@ export type ModelProfile = {
   model_name: string
   parameters: Record<string, unknown>
   source: string
-  has_api_key?: boolean
 }
 
 export type Scenario = {
@@ -141,24 +119,31 @@ export type Scenario = {
 }
 
 export type Health = {
-  status: string
-  profile: string
-  truth_source: string
-  qdrant: { url: string; status: string; points?: number; error?: string }
-  lm_studio: { chat_base_url: string; status: string; models?: string[]; error?: string }
-  models: { chat: string; embedding: string; reranker?: string | null }
-  documents: number
+  status?: string
+  profile?: string
+  environment?: string
+  truth_source?: string
+  documents?: number
+  qdrant?: { status?: string }
+  lm_studio?: { status?: string }
+  models?: { chat?: string; embedding?: string; reranker?: string | null }
+  production_readiness?: { warnings: string[] }
 }
 
-export type KnowledgeBase = { knowledge_base_id: string; name: string; created_at: string }
-
-export type UploadResult = {
-  job_id?: string
+export type IngestResult = {
   document: DocumentInfo
-  route: { route: string; confidence: number; reason_codes: string[] }
   blocks: number
   chunks: number
-  index?: { status: string; indexed?: number; reason?: string; next_action?: string; embedding_model_id?: string }
-  trace_id?: string
+  route: { route: string; confidence: number; reason_codes: string[] }
+  index?: Record<string, unknown>
   trace?: TraceEvent[]
+  trace_id?: string
 }
+
+export type RailTab = 'recipe' | 'data' | 'model' | 'scenario'
+export type BottomTab = 'trace' | 'ingest' | 'result'
+
+/** 顶栏三态模式：干净工作台 / 辅助教学（7 步操作课） / 面试讲解（RAG 设计课） */
+export type WorkbenchMode = 'work' | 'teach' | 'interview'
+
+export type Message = { text: string; tone: 'info' | 'ok' | 'err' }
