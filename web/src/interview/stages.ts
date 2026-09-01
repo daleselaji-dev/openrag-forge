@@ -335,7 +335,7 @@ export const STAGE_LESSONS: Record<string, StageLesson> = {
       ifMissing: '精确匹配类问题系统性偏弱——本仓库当前正处于这个状态，评测里应该能看到这类 case 的失败。',
       ifOverdone: '为占比 2% 的精确查询建整套双索引：先用评测确认这类问题的真实占比再投入。',
     },
-    liveStatus: 'live 基线：本地 BM25 对真相源 Chunk 建立临时倒排统计并独立召回；它不是 Qdrant named sparse，生产规模应替换为持久化倒排/稀疏索引。',
+    liveStatus: 'live 基线：本地 BM25 对真相源 Chunk 建立临时倒排统计并独立召回；后端不可用时可退化为词法回退。它不是 Qdrant named sparse，生产规模应替换为持久化倒排/稀疏索引。',
     interviewQs: [{ q: '实现它你会选什么方案？', a: '两条路：已有 ES/OpenSearch → 直接用 BM25（运维复用）；没有 → Qdrant 命名稀疏向量（SPLADE 类学习型稀疏），单库双路省掉一致性问题。决策关键是运维归属而不是算法分数——这是 PM 视角与算法视角的典型分歧点。' }],
   },
   rrf_fusion: {
