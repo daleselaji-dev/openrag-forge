@@ -65,6 +65,10 @@ def test_reprocess_with_chunker_config_bumps_version(tmp_path, monkeypatch):
 
 def test_hybrid_run_offline_records_honest_backends(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "data_dir", tmp_path)
+    # Keep this regression test deterministic even when a developer happens
+    # to have a real Qdrant running locally.
+    monkeypatch.setattr(settings, "qdrant_url", "http://127.0.0.1:1")
+    monkeypatch.setattr(settings, "chat_base_url", "http://127.0.0.1:1/v1")
     with TestClient(app) as client:
         client.post(
             "/api/v1/knowledge-bases/default/documents",
@@ -145,6 +149,36 @@ def test_model_registration_masks_api_key(tmp_path, monkeypatch):
         probe = client.post("/api/v1/models/cloud-chat/probe").json()
         assert probe["status"] in {"ready", "unreachable"}
         assert "sk-secret-value" not in str(probe)
+
+
+def test_model_probe_rejects_http_200_error_payload(tmp_path, monkeypatch):
+    """Some local servers return HTTP 200 with an unsupported-route error body."""
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"error": "Unexpected endpoint or method. (POST /rerank)"}
+
+    class FakeClient:
+        def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr("openrag_forge.app.get_http_client", lambda: FakeClient())
+    with TestClient(app) as client:
+        registered = client.post("/api/v1/models", json={
+            "model_id": "unsupported-reranker", "display_name": "Unsupported Reranker", "kind": "reranker",
+            "base_url": "http://localhost:23145", "model_name": "openrag-reranker",
+        })
+        assert registered.status_code == 200
+        probe = client.post("/api/v1/models/unsupported-reranker/probe")
+        assert probe.status_code == 200
+        assert probe.json()["status"] == "unreachable"
+        assert "Unexpected endpoint" in probe.json()["details"]["error"]
 
 
 def test_recipe_import_export_roundtrip(tmp_path, monkeypatch):

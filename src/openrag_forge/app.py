@@ -551,6 +551,15 @@ def probe_model(model_id: str):
                 timeout=30,
             )
         response.raise_for_status()
+        # Some OpenAI-compatible servers return HTTP 200 with an error object
+        # for unsupported routes (LM Studio currently does this for /rerank).
+        # Treat that as unavailable instead of reporting a false-ready probe.
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        if isinstance(payload, dict) and payload.get("error"):
+            raise RuntimeError(str(payload["error"]))
         return {"status": "ready", "model_id": model_id, "kind": model["kind"], "details": {"http_status": response.status_code, "base_url": base_url}}
     except Exception as exc:
         return {"status": "unreachable", "model_id": model_id, "kind": model["kind"], "details": {"error": str(exc), "base_url": base_url}}

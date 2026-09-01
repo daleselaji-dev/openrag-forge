@@ -531,6 +531,7 @@ class QueryExecutor:
             self.question, self.evidence, self.settings, profile=profile,
             temperature=float(config.get("temperature", 0.1)), max_tokens=int(config.get("max_tokens", 600)),
         )
+        raw_provider = provider
         repaired = False
         if self.evidence and not re.search(r"\[S\d+\]", answer):
             from ..generation.client import extractive_answer
@@ -540,7 +541,9 @@ class QueryExecutor:
         self.answer = answer
         self.provider = provider
         self.node_outputs[node.id] = {"answer": answer}
-        impact = {"provider": provider, "citation_count": len(self.evidence), "citation_repaired": repaired, "answer_chars": len(answer), "model_ref": str(config.get("model_ref", "")) or None, "config_used": _redact(config)}
+        impact = {"provider": provider, "raw_provider": raw_provider, "citation_count": len(self.evidence), "citation_repaired": repaired, "answer_chars": len(answer), "model_ref": str(config.get("model_ref", "")) or None, "config_used": _redact(config)}
+        if repaired:
+            impact["repair_reason"] = "missing_citation_markers"
         execution = "live" if provider == "openai_compatible_chat" else "fallback_extractive"
         self._record(node, "completed", f"生成受证据约束的回答（provider={provider}）", impact, started=started, execution=execution)
 
