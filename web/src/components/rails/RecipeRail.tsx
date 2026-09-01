@@ -21,7 +21,7 @@ export default function RecipeRail({ recipes, selectedRecipeId, catalog, dirty, 
         <h3>Recipe 目录</h3>
         <button className="ghost small" onClick={onCreateDraft}>创建草稿副本</button>
       </div>
-      {teachOn && <p className="teach-hint">教学：Recipe 是编译过的 typed DAG。目录里的 V0.2~V0.8 展示演进路线，但其中 稀疏/RRF/重排 等节点仍是占位——选中后看节点徽标，不要按名字推断能力。</p>}
+      {teachOn && <p className="teach-hint">教学：Recipe 是编译过的 typed DAG。V0.2 的 BM25 + RRF、上下文预算、纠错、缓存和限流已有真实执行；重排依赖可达的 /rerank 端点，图谱仍是 stub。始终结合节点徽标与 Trace 判断能力，不要只按名字推断。</p>}
       <div className="recipe-list">
         {sorted.map((recipe) => {
           const stubCount = recipe.nodes.filter((node) => catalog[node.type]?.implemented && catalog[node.type].implemented !== 'live').length

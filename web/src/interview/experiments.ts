@@ -25,7 +25,7 @@ export const EXPERIMENTS: Experiment[] = [
       '注意 Trace 里该行的 execution：qdrant_dense（真向量检索）或 lexical_fallback（词法回退，Qdrant/Embedding 未就绪时）。',
     ],
     expected: 'top_k=1 时证据只有 1 条，答案对单点问题可能不变，对需要多段证据的问题变差；top_k=10 时证据变多、Prompt 变长（生成成本上升），可能混入低分噪声。节点配置优先于底部控制台的 Top K 参数——这验证了「Recipe 即真相」。',
-    honestNote: '当前没有 context_builder 的 token 预算兜底（占位），top_k 开大后 Prompt 长度直接线性上涨——成本闸门由你自己扛。',
+    honestNote: 'context_builder 已提供 token_budget 兜底；你可以把预算从 4000 调低，观察 Trace 中的裁剪与证据数量变化。MMR 仍未启用，避免把未实现的收益写成结论。',
     actions: [{ label: '加载 V0.1 并开始', recipeId: 'v0_1_dense', railTab: 'recipe' }],
   },
   {
@@ -79,7 +79,7 @@ export const EXPERIMENTS: Experiment[] = [
   },
   {
     id: 'stub-proof',
-    title: '实验 5 · 占位证明：用行为验证 reranker 是 stub',
+    title: '实验 5 · 依赖证明：用行为验证 reranker 的 live / fallback',
     change: '不改配置——对比两条 Recipe 的实际行为',
     steps: [
       '加载 V0.1 Dense baseline，真实运行，记下证据列表顺序。',
@@ -88,10 +88,10 @@ export const EXPERIMENTS: Experiment[] = [
     ],
     watch: [
       '两次证据列表完全一致——重排没有发生。',
-      'Trace 里 sparse_retrieve 行标 fallback_shared_dense（共享稠密结果），rrf_fusion 与 reranker 行标 stub_passthrough（占位直通）。',
-      '画布上这三个节点的「退化/占位」徽标与 Trace 标注一致。',
+      'Trace 里 sparse_retrieve 行标 bm25_local，rrf_fusion 行标 live；reranker 在未配置端点时标 fallback_passthrough，配置后才会标 rerank_live。',
+      '画布上的 live/fallback 徽标与 Trace 标注一致，说明依赖缺失时系统如何继续运行。',
     ],
-    expected: '徽标、Trace、行为三方互相印证：目录里的 v0_4_rerank 只是「形」，执行仍是 Naive 的「实」。这是本工作台「用 Trace 证明而不是用目录宣传」的核心练习——面试里能现场演示这一点，比任何口头承诺都可信。',
+    expected: '徽标、Trace、行为三方互相印证：v0_4_rerank 在端点未就绪时不会假装完成重排，端点就绪后才展示真实排序变化。这是本工作台「用 Trace 证明而不是用目录宣传」的核心练习。',
     honestNote: '这正是「目录能力 ≠ 已实现能力」的可复现实证，也是我把 3/10 算法面评分讲得有底气的原因。',
     actions: [{ label: '先跑 V0.1', recipeId: 'v0_1_dense', railTab: 'recipe' }, { label: '再跑 V0.4', recipeId: 'v0_4_rerank', railTab: 'recipe' }],
   },

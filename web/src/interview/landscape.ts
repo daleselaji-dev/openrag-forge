@@ -6,7 +6,7 @@ import type { LandscapeCategory, ParadigmRow } from './types'
 
 export const LANDSCAPE_INTRO: string[] = [
   '选 RAG 方案本质上是三个问题：数据能不能出域（合规轴）、团队要多深的定制权（控制轴）、愿意养多少运维（成本轴）。下面每个方案我都按同一组维度拆：定位、装配方式、可观测性、定制深度、成本运维、合规、对 PM 的意义、优劣、何时该选、与本工作台的差异。',
-  '先说清 OpenRAG Forge 站在哪：它是「可拆、可证明」的设计沙盘——用来在采购或自研决策之前，把候选链路装配出来、跑通、用 Trace 验证每一环的真实行为。它故意不站在「托管规模」「算法完备」这两个位置：没有弹性伸缩，稀疏/重排还是占位。用它做决策依据，然后把生产流量交给下面某个方案或自研栈。',
+  '先说清 OpenRAG Forge 站在哪：它是「可拆、可证明」的设计沙盘——用来在采购或自研决策之前，把候选链路装配出来、跑通、用 Trace 验证每一环的真实行为。它故意不站在「托管规模」「算法完备」这两个位置：已有本地 BM25/RRF/上下文与纠错基线，但没有弹性伸缩，重排依赖端点、图谱仍未接入。用它做决策依据，然后再把生产流量交给更完整的自研栈。',
 ]
 
 export const PARADIGMS_INTRO =
@@ -19,7 +19,7 @@ export const PARADIGMS: ParadigmRow[] = [
     pipeline: 'chunk → embed → dense top-k → prompt → LLM',
     strengths: '实现快、行为可预测、故障面小；是一切评测的基线。',
     weaknesses: '召回天花板低：措辞不匹配就漏、精确 token 匹配弱、噪声直接进 Prompt；没有查询理解，长问题/多跳问题崩。',
-    forgeStance: '本仓库的 v0_1_dense 就是标准 Naive RAG，且是唯一全 live 的链路——我们诚实地站在这里。',
+    forgeStance: '本仓库的 v0_1_dense 就是标准 Naive RAG 对照组，后续 Recipe 在它之上逐步加入可观测、混合、重排与运维能力。',
   },
   {
     name: 'Advanced RAG',
@@ -27,7 +27,7 @@ export const PARADIGMS: ParadigmRow[] = [
     pipeline: 'query rewrite → hybrid(dense+sparse) → RRF → rerank → context compress → LLM',
     strengths: '生产界的事实标准形态；重排通常是单点收益最大的模块；混合检索兜住专有名词。',
     weaknesses: '每加一个模块都加时延与运维面；模块间相互影响，没有评测基线时无法归因收益。',
-    forgeStance: '目录里的 v0_2~v0_5 Recipe 描绘了这个形态，但稀疏/RRF/重排是占位——画布能装配出 Advanced RAG 的「形」，执行是 Naive 的「实」。这正是拿来讲「目录能力 ≠ 已实现能力」的教具。',
+    forgeStance: 'v0.2~v0.5 Recipe 描绘 Advanced RAG 的演进；BM25/RRF、上下文预算与父块扩展已有本地执行，重排按端点可用性显示 live/fallback。画布、Trace 与配置三者共同说明当前到底是哪一种实现。',
   },
   {
     name: 'Modular RAG',
@@ -233,7 +233,7 @@ export const LANDSCAPE: LandscapeCategory[] = [
         strengths: ['一个引擎两路召回，天然混合检索', '倒排能力（过滤、聚合、权限）无可替代', '运维生态与人才市场成熟'],
         weaknesses: ['纯向量性能/成本不如专用向量库', '大规模高维向量的内存开销大', 'RAG 上层环节仍需别的框架'],
         whenToPick: '已有 ES/OpenSearch 基建与团队、需要混合检索与复杂过滤、向量规模千万级以内时。',
-        vsForge: 'Forge 的稀疏检索与 RRF 恰恰是占位——ES hybrid 是这两个占位节点的「真身」。向量库专章里专门讨论了「向量库 vs 倒排引擎」的分工与选择。',
+        vsForge: 'Forge 用本地 BM25 + RRF 提供可复现的轻量基线；ES/OpenSearch hybrid 是生产规模下可替换的持久化实现。向量库专章里专门讨论了「向量库 vs 倒排引擎」的分工与选择。',
       },
       {
         id: 'vespa',
@@ -272,7 +272,7 @@ export const LANDSCAPE: LandscapeCategory[] = [
         strengths: ['全局性、跨文档、多跳问题的唯一系统解', '图资产可复用（可视化、审计、BI）', '社区摘要提供「整体是什么」的能力'],
         weaknesses: ['索引成本高（LLM 抽取 token 量巨大）', '增量更新困难', '抽取错误难发现、难修复'],
         whenToPick: '问题分布里全局/关系类占比可观、语料相对稳定、且愿意为索引期成本买单时。',
-        vsForge: 'Forge 的 graph_query 节点是 fallback（未接图库，执行时共享稠密结果）——目录里保留它是为了讲清这条路线的位置，画布上能装配出图增强的形态，Trace 会诚实告诉你它没干活。真要走图路线，去看 Microsoft GraphRAG 或 Neo4j 的实现。',
+        vsForge: 'Forge 的 graph_query 节点仍是 stub（未接图库，运行会 skipped，不会伪造证据）——目录里保留它是为了讲清这条路线的位置。真要走图路线，去看 Microsoft GraphRAG 或 Neo4j 的实现。',
       },
     ],
   },
@@ -283,6 +283,6 @@ export const LANDSCAPE_CONCLUSION: { title: string; points: string[] } = {
   points: [
     '买（托管套件）：检索不是产品差异化点、数据出域可接受（或云边界可接受）、上线时间 < 一个季度。选型顺序看既有云：Azure→AI Search，AWS→Kendra/Bedrock KB，GCP→Vertex；纯验证用 OpenAI File Search 一天出结论。验收时必须写进合同的三件事：坏 case 归因通道、权限过滤行为、成本模型上限。',
     '建（开源编排 + 检索中台）：数据不能出域、检索质量是产品核心、或需要深度定制（行业切分、私有重排）。默认组合：LlamaIndex/Haystack + 已有 ES 则 hybrid / 无基建则 Qdrant 类向量库 + LangSmith/Langfuse 观测。走向 Agent 化选 LangGraph；文档版式复杂加 RAGFlow 类解析；全局关系问题占比高再评估 GraphRAG。',
-    '用本工作台（设计沙盘，非生产引擎）：在买/建决策之前，用它把候选链路装配出来、跑 Trace、写验收标准——「重排该带来什么可测量的收益」「安全门该挡什么」在沙盘里先想清楚，再去花钱。它的占位节点此时反而是优点：架构讨论不被具体实现绑架。明确不该用它的场景：接真实客户数据、SLA 承诺、多租户——它没有 KB 隔离、算法面是 Naive+、安全门是正则，这些都写在画布的徽标上。',
+    '用本工作台（设计沙盘，非生产引擎）：在买/建决策之前，用它把候选链路装配出来、跑 Trace、写验收标准——「重排该带来什么可测量的收益」「安全门该挡什么」在沙盘里先想清楚，再去花钱。当前的本地 BM25/RRF/上下文/纠错可用于基线实验，图谱与视觉检索仍是可见的 stub/fallback。明确不该用它的场景：接真实客户数据、SLA 承诺、多租户——Lite 版没有 KB 隔离，安全门仍是正则，这些都写在画布徽标上。',
   ],
 }

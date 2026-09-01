@@ -46,6 +46,8 @@ function App() {
   const [topK, setTopK] = useState(5)
   const [uploadRoute, setUploadRoute] = useState('auto')
   const [embeddingModelId, setEmbeddingModelId] = useState('configured-embedding')
+  const [chunkMaxChars, setChunkMaxChars] = useState(1200)
+  const [chunkOverlap, setChunkOverlap] = useState(120)
 
   const [run, setRun] = useState<Run | null>(null)
   const [runMeta, setRunMeta] = useState<RunMeta | null>(null)
@@ -304,6 +306,8 @@ function App() {
     const params = new URLSearchParams()
     if (uploadRoute !== 'auto') params.set('route', uploadRoute)
     if (embeddingModelId) params.set('embedding_model_id', embeddingModelId)
+    params.set('max_chars', String(chunkMaxChars))
+    params.set('overlap', String(Math.min(chunkOverlap, Math.floor(chunkMaxChars / 2))))
     try {
       const body = await api<IngestResult>(`/api/v1/knowledge-bases/${kbId}/documents?${params.toString()}`, { method: 'POST', body: form })
       setDocuments((items) => [body.document, ...items.filter((item) => item.document_id !== body.document.document_id)])
@@ -321,7 +325,9 @@ function App() {
   const reprocess = async (documentId: string) => {
     setBusy(true)
     try {
-      const body = await api<{ document: DocumentInfo; blocks: number; chunks: number }>(`/api/v1/documents/${documentId}/reprocess${uploadRoute !== 'auto' ? `?route=${encodeURIComponent(uploadRoute)}` : ''}`, { method: 'POST' })
+      const params = new URLSearchParams({ max_chars: String(chunkMaxChars), overlap: String(Math.min(chunkOverlap, Math.floor(chunkMaxChars / 2))), embedding_model_id: embeddingModelId })
+      if (uploadRoute !== 'auto') params.set('route', uploadRoute)
+      const body = await api<{ document: DocumentInfo; blocks: number; chunks: number }>(`/api/v1/documents/${documentId}/reprocess?${params.toString()}`, { method: 'POST' })
       setDocuments((items) => items.map((item) => (item.document_id === documentId ? body.document : item)))
       setMessage({ text: `重解析完成：${body.blocks} blocks · ${body.chunks} chunks（使用当前 Chunker 配置）`, tone: 'ok' })
     } catch (error) {
@@ -414,7 +420,7 @@ function App() {
   const railContent = railTab === 'recipe' ? (
     <RecipeRail recipes={recipes} selectedRecipeId={selectedRecipeId} catalog={catalog} dirty={dirty} teachOn={teachOn} onSelectRecipe={(id) => selectRecipe(id)} onCreateDraft={createDraft} />
   ) : railTab === 'data' ? (
-    <DataRail documents={documents} models={models} kbId={kbId} uploadRoute={uploadRoute} embeddingModelId={embeddingModelId} busy={busy} teachOn={teachOn} setUploadRoute={setUploadRoute} setEmbeddingModelId={setEmbeddingModelId} onUpload={(file) => void upload(file)} onReprocess={(id) => void reprocess(id)} onRebuildIndex={() => void rebuildIndex()} />
+    <DataRail documents={documents} models={models} kbId={kbId} uploadRoute={uploadRoute} embeddingModelId={embeddingModelId} chunkMaxChars={chunkMaxChars} chunkOverlap={chunkOverlap} busy={busy} teachOn={teachOn} setUploadRoute={setUploadRoute} setEmbeddingModelId={setEmbeddingModelId} setChunkMaxChars={setChunkMaxChars} setChunkOverlap={setChunkOverlap} onUpload={(file) => void upload(file)} onReprocess={(id) => void reprocess(id)} onRebuildIndex={() => void rebuildIndex()} />
   ) : railTab === 'model' ? (
     <ModelRail models={models} teachOn={teachOn} probes={probes} onRegister={registerModel} onProbe={(id) => void probeModel(id)} />
   ) : (

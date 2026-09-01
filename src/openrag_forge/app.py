@@ -375,7 +375,7 @@ def list_documents(knowledge_base_id: str):
 
 
 @app.post("/api/v1/knowledge-bases/{knowledge_base_id}/documents")
-def upload_document(knowledge_base_id: str, file: UploadFile = File(...), route: str | None = None, embedding_model_id: str | None = None):
+def upload_document(knowledge_base_id: str, file: UploadFile = File(...), route: str | None = None, embedding_model_id: str | None = None, max_chars: int | None = None, overlap: int | None = None):
     filename = _safe_filename(file.filename)
     file.file.seek(0)
     content = file.file.read()
@@ -390,14 +390,16 @@ def upload_document(knowledge_base_id: str, file: UploadFile = File(...), route:
     media_type = file.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
     document = Document(document_id=document_id, knowledge_base_id=knowledge_base_id, filename=filename, media_type=media_type, size_bytes=len(content), sha256=hashlib.sha256(content).hexdigest())
     app.state.store.save_document(document, content)
-    max_chars, overlap = _ingest_chunk_config(ingest_recipe)
+    default_max, default_overlap = _ingest_chunk_config(ingest_recipe)
+    effective_max = max(200, min(4000, int(max_chars or default_max)))
+    effective_overlap = max(0, min(effective_max // 2, int(overlap if overlap is not None else default_overlap)))
     try:
         step_started = time.perf_counter()
         decision, blocks = parse_bytes(document_id, filename, media_type, content, route)
         ingest_trace.record("route", "completed", f"选择解析路由：{decision.route}", {"confidence": decision["confidence"], "reason_codes": decision["reason_codes"], "execution": "live", "node_type": "parse_route"}, started=step_started)
         step_started = time.perf_counter()
-        chunks = chunk_blocks(blocks, max_chars, overlap)
-        ingest_trace.record("chunk", "completed", f"生成 {len(chunks)} 个 Chunk（max_chars={max_chars}, overlap={overlap}）", {"blocks": len(blocks), "chunks": len(chunks), "max_chars": max_chars, "overlap": overlap, "execution": "live", "node_type": "chunker"}, started=step_started)
+        chunks = chunk_blocks(blocks, effective_max, effective_overlap)
+        ingest_trace.record("chunk", "completed", f"生成 {len(chunks)} 个 Chunk（max_chars={effective_max}, overlap={effective_overlap}）", {"blocks": len(blocks), "chunks": len(chunks), "max_chars": effective_max, "overlap": effective_overlap, "execution": "live", "node_type": "chunker"}, started=step_started)
         step_started = time.perf_counter()
         chunks = enrich_chunks(chunks, blocks, filename)
         document = document.model_copy(update={"status": "parsed", "parser_route": decision.route, "parser_confidence": decision["confidence"], "reason_codes": decision["reason_codes"]})
@@ -423,7 +425,7 @@ def upload_document(knowledge_base_id: str, file: UploadFile = File(...), route:
             observe_fallback("qdrant_index")
             index = {"status": "deferred", "reason": str(index_error), "next_action": "启动 Embedding 与 Qdrant 后重建索引"}
             ingest_trace.record("index", "failed", "索引暂缓，原始文档与 Chunk 已保留", {**index, "execution": "fallback_deferred", "node_type": "embed_index"}, started=step_started)
-        return {"job_id": document_id, "document": document, "route": decision, "blocks": len(blocks), "chunks": len(chunks), "index": index, "trace_id": ingest_trace.run_id, "trace": [event.model_dump() for event in ingest_trace.events]}
+        return {"job_id": document_id, "document": document, "route": decision, "blocks": len(blocks), "chunks": len(chunks), "max_chars": effective_max, "overlap": effective_overlap, "index": index, "trace_id": ingest_trace.run_id, "trace": [event.model_dump() for event in ingest_trace.events]}
     except Exception as exc:
         ingest_trace.record("route", "failed", "解析失败，原始文件已保留", {"error": str(exc)})
         document = document.model_copy(update={"status": "failed", "reason_codes": ["parser_failed", type(exc).__name__]})
@@ -461,7 +463,7 @@ def reprocess_document(document_id: str, route: str | None = None, max_chars: in
     ingest_recipe = app.state.store.get_recipe("custom_ingest")
     default_max, default_overlap = _ingest_chunk_config(ingest_recipe)
     effective_max = max(200, min(4000, int(max_chars or default_max)))
-    effective_overlap = max(0, min(400, int(overlap or default_overlap)))
+    effective_overlap = max(0, min(effective_max // 2, int(overlap if overlap is not None else default_overlap)))
     try:
         decision, blocks = parse_bytes(document_id, document.filename, document.media_type, path.read_bytes(), route)
         chunks = chunk_blocks(blocks, effective_max, effective_overlap)

@@ -51,7 +51,7 @@ export const COMPONENT_CHAPTERS: DeepDiveChapter[] = [
           '固定滑窗（字符/token 数 + 重叠）：最便宜、行为可预测，是一切评测的基线——本仓库的实现在此基础上沿 Block 结构边界切，避免跨节切断。',
           '结构感知切分：按标题/段落/表格行边界切——利用作者已经做好的信息组织，性价比最高的升级。本仓库因为有 Block 层（解析器保留 heading_path），天然就是结构感知的。',
           '语义切分：按相邻句子嵌入相似度的「断崖」找主题边界——对无结构长文本有效，但要额外付一遍嵌入成本，且边界不稳定（模型一换边界全变）。',
-          '父子分层（small-to-big）：小块检索大块阅读，解耦「检索最优粒度」与「阅读最优粒度」——本仓库数据模型已支持（Chunk→Block 层级），parent_expansion 执行器未实现（占位）。',
+          '父子分层（small-to-big）：小块检索大块阅读，解耦「检索最优粒度」与「阅读最优粒度」——本仓库通过 Chunk→Block 关系真实扩展父级上下文，window / max_chars_per_side 可调；没有关系时会如实记录无扩展。',
           'LLM/Agent 切分与上下文富化（给每块生成摘要或前置全文梗概）：效果上限高、索引成本翻数倍——先证明前三档不够再上。',
         ],
       },
@@ -79,8 +79,8 @@ export const COMPONENT_CHAPTERS: DeepDiveChapter[] = [
   },
   {
     id: 'rerank',
-    title: 'Rerank 的产品价值（以及本仓库为何还没做）',
-    intro: '重排是生产 RAG 最常见的「第二个上的模块」。这一章把它的价值讲透，同时诚实讲清：本仓库的 reranker 是占位直通，以及这个排期决策背后的产品逻辑。',
+    title: 'Rerank 的产品价值与依赖边界',
+    intro: '重排是生产 RAG 最常见的「第二个上的模块」。本仓库已经接通 Cross-Encoder 适配器：注册可达的 /rerank 端点时真实重排；未配置时明确 fallback，方便在本地离线环境继续学习。',
     sections: [
       {
         heading: '原理一分钟：双编码器 vs 交叉编码器',
@@ -102,9 +102,8 @@ export const COMPONENT_CHAPTERS: DeepDiveChapter[] = [
       {
         heading: '本仓库为什么还没做（排期即产品决策）',
         paragraphs: [
-          '现状：reranker 节点是 stub 占位直通——model_ref/candidate_k/final_k 保存但不生效，证据保持召回顺序。v0_4_rerank 与 v0_1_dense 的实际执行路径几乎相同，Trace 里写得明明白白。',
-          '为什么这个顺序：重排的收益要在「召回池足够大且有评测尺子」的前提下才能测量。当前单路 dense、top_k=5 的池子太小，重排的理论收益被截断；而没有稳定评测基线时，上了重排也无法向任何人证明它值回成本。所以我的排期是：评测基线 → 稀疏+RRF（扩池）→ 重排（精排）。宁可画布上挂着「占位」徽标，也不做一个测不出收益的半成品——这个决策本身就是我想在面试里展示的产品判断。',
-          '如果现在实现，最小闭环是：dense top_k 提到 30 → 接一个开源 cross-encoder 端点（模型注册表已支持 reranker 类型档案，接口留好了）→ 输出 final_k=6 → 用黄金集对比前后 Hit@3/MRR → 收益达标才默认开启。',
+          '现状：reranker 节点会读取 model_ref、candidate_k、final_k。注册可达的 /rerank 端点时 Trace 标记 rerank_live；端点不可用时标记 fallback_passthrough，证据顺序保持不变——这是依赖降级，不是伪装成已完成。',
+          '为什么仍然要先扩池和评测：重排的收益要在「召回池足够大且有评测尺子」的前提下才能测量。推荐闭环是：dense/sparse top_k 提到 30~50 → 接一个本地 BGE Cross-Encoder 端点 → 输出 final_k=6 → 用黄金集对比 Hit@3/MRR 与 p95 → 收益达标才默认开启。',
         ],
       },
     ],
@@ -138,8 +137,8 @@ export const COMPONENT_CHAPTERS: DeepDiveChapter[] = [
         heading: '工程细节的产品含义',
         paragraphs: [
           '时延：生成是全链路时延大头，流式输出（首 token 时间）是体感优化第一杠杆——本仓库未实现流式，是体验侧最明显的欠账之一。',
-          '成本：生成费用 = 上下文（top_k × chunk 大小 + 指令）+ 输出（max_tokens 封顶）。上下文部分被检索参数直接放大——这就是为什么 context_builder 的 token 预算（当前占位）在生产里是成本闸门。',
-          '模型分级：简单 FAQ 复述用小模型、复杂推理用大模型，按意图路由分流——前提是意图路由真实存在（本仓库该节点占位），所以分级路由在本仓库暂无落点，如实说。',
+          '成本：生成费用 = 上下文（top_k × chunk 大小 + 指令）+ 输出（max_tokens 封顶）。上下文部分被检索参数直接放大——context_builder 的 token 预算已经是可调的成本闸门。',
+          '模型分级：简单 FAQ 复述用小模型、复杂推理用大模型，按意图路由分流——本仓库当前提供启发式 intent_router 基线；它可运行但仍需用 Intent Macro-F1 评测后再替换为分类模型。',
         ],
       },
     ],

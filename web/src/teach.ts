@@ -18,7 +18,7 @@ export const TEACH_STEPS: TeachStep[] = [
     title: '认识 Control Room',
     body: [
       '这个工作台把一次 RAG 运行拆成可检查的环节：左轨切换 装配 / 数据 / 模型 / 场景，中间是 Recipe 画布，右侧检查器调配选中节点，底部是 Trace 与结果。',
-      '先记住一条诚实原则：画布上带「占位」「退化」徽标的节点，表示目录里声明了这个能力、但执行器尚未真正实现（如 稀疏检索 / RRF / 重排）。Trace 里对应的 execution 标注会告诉你每一步真实发生了什么。',
+      '先记住一条诚实原则：画布上的徽标必须和 Trace 一起读。live 表示本地真实执行，fallback 表示依赖未就绪时的可解释降级（例如未配置 /rerank 端点），stub 表示当前仍未接入（图谱）。Trace 里的 execution 标注会告诉你每一步真实发生了什么。',
     ],
     lookFor: ['画布节点上的「占位 / 退化」徽标', '顶栏的 profile 与生产就绪告警'],
     coachTarget: 'canvas',
@@ -85,7 +85,7 @@ export const TEACH_STEPS: TeachStep[] = [
     title: '场景示范：该看哪些 Trace',
     body: [
       '场景卡片声明业务问题、所需资料、默认 Recipe 和「应观察的 Trace」。教学模式下每张卡都会列出观察清单——运行后逐条对照，你就知道一条链路有没有按声明工作。',
-      '注意：客服/政策场景默认引用 hybrid / rerank Recipe，但稀疏检索与重排当前是占位——对照 Trace 你会看到实际只有稠密（或词法回退）一路候选。这正是「用 Trace 证明，而不是用目录宣传」的练习。',
+      '注意：客服/政策场景默认引用 hybrid / rerank Recipe。稀疏检索与 RRF 现在会真实执行；重排只有在注册可达的 /rerank 端点时才会调用，否则 Trace 会明确显示 fallback_passthrough。对照 Trace，你能分辨「算法真的运行」和「依赖未就绪」两种情况。',
     ],
     lookFor: ['场景卡的 Trace 观察清单', '运行后逐条核对是否真的发生'],
     action: { label: '去看场景', railTab: 'scenario' },

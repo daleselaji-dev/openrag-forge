@@ -95,6 +95,26 @@ export type DocumentInfo = {
   version: number
 }
 
+export type ParsedBlock = {
+  block_id: string
+  document_id: string
+  block_type: string
+  text: string
+  order: number
+  page?: number | null
+  heading_path: string[]
+  metadata: Record<string, unknown>
+}
+
+export type ChunkInfo = {
+  chunk_id: string
+  document_id: string
+  text: string
+  order: number
+  block_ids: string[]
+  metadata: Record<string, unknown>
+}
+
 export type ModelProfile = {
   model_id: string
   display_name: string

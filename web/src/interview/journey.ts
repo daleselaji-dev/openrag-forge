@@ -7,7 +7,7 @@ import type { JourneyGeneration } from './types'
 
 export const JOURNEY_INTRO: string[] = [
   '下面这条时间线是我做这个 RAG 项目的真实决策顺序，不是回头补写的漂亮故事。每一代我都会讲四件事：当时的业务动机、我做的产品决策、为此牺牲了什么、以及为什么必须走到下一代。',
-  '一个提前声明：这条线走到今天，运维横切面（可观测、探针、鉴权、限流）已经达到生产级要求，但检索算法面仍然只有稠密检索是真实现——稀疏检索、RRF、重排在目录里存在、在执行器里是占位。我把这个差距明确标在工作台上（占位/退化徽标），因为「知道自己没做什么」本身就是这个作品最想展示的产品能力。',
+  '一个提前声明：这条线走到今天，运维横切面（可观测、探针、鉴权、限流）已经有可运行基线；检索算法面也已补上本地 BM25、RRF、上下文预算、父块扩展与有界纠错。重排会根据是否配置可达的 /rerank 端点显示 live 或 fallback，图谱仍是 stub。我把这些差异明确标在工作台上，因为「知道自己做到了哪一级」本身就是这个作品最想展示的产品能力。',
 ]
 
 export const JOURNEY: JourneyGeneration[] = [
@@ -57,9 +57,9 @@ export const JOURNEY: JourneyGeneration[] = [
     whyNext: 'Naive RAG 跑通后，最大的痛不是效果而是「说不清」：为什么这个问题答错了？是没召回、召回错、还是生成瞎编？没有 Trace 之前，每次排查都靠猜。可观察性成了下一代的主题。',
     interviewQs: [
       { q: 'top_k 怎么定？为什么默认 5？', a: '这是三方权衡：k 太小漏证据（Hit@k 下降），k 太大稀释上下文且拉长 Prompt（成本+噪声）。5 是我在没有重排的前提下的保守值——如果有真实重排，正确姿势是「粗召回 k=50，精排出 6」。工作台里 dense_retrieve 节点的 top_k 是真实生效的，可以现场改了跑对比。' },
-      { q: '为什么不一步到位上混合检索？', a: '产品阶段判断：当时没有任何评测基线，我无法证明混合检索带来的提升值得两套索引的运维成本。先把单路跑通、建立评测（后来的 golden eval），有了尺子再加东西。事实上这个仓库到今天稀疏检索仍是占位——我宁可标注「没做」也不做一个测不出收益的半成品。' },
+      { q: '为什么不一步到位上混合检索？', a: '产品阶段判断：当时没有任何评测基线，我无法证明混合检索带来的提升值得两套索引的运维成本，所以先把单路跑通。现在 BM25 + RRF 已有真实本地基线，下一步是用固定 Golden Set 判断它是否值得承担双路索引的运维成本。' },
     ],
-    legacy: ['左轨「装配」页的 V0.1 Dense baseline 就是这一代本尊，至今是唯一全 live 的检索链路。', '选中 dense_retrieve 节点：top_k、score_threshold 真实生效；选中 chunker 节点：max_chars/overlap 真实生效。'],
+    legacy: ['左轨「装配」页的 V0.1 Dense baseline 是这条演进线的对照组；V0.2 已加入本地 BM25 + RRF。', '选中 dense_retrieve 节点：top_k、score_threshold 真实生效；选中 chunker 节点：max_chars/overlap 真实生效。'],
     actions: [{ label: '加载 V0.1 Dense baseline', recipeId: 'v0_1_dense', railTab: 'recipe' }],
   },
   {
@@ -142,7 +142,7 @@ export const JOURNEY: JourneyGeneration[] = [
   },
   {
     id: 'current',
-    name: '当前诚实态：Control Room + live/stub 徽标，算法面仍是 Naive+',
+    name: '当前诚实态：Control Room + live/fallback/stub 徽标',
     tagline: '把「已实现」和「仅声明」的边界画在界面上，作为产品能力交付。',
     motivation: [
       '最后一个要解决的产品问题是自己制造的：V0.3 的目录超前于执行器，画布上摆着 reranker、rrf_fusion，不知情的人会以为混合检索已经在跑。演示时含糊过去很容易——但这个项目的立身之本是「可证明」，界面撒谎等于全盘作废。',
@@ -156,12 +156,12 @@ export const JOURNEY: JourneyGeneration[] = [
     ],
     tradeoffs: [
       '牺牲了演示观感：画布上一片「占位」徽标不好看。但换来的是每个结论都能当场用 Trace 验证——对面试和对客户，这都是更强的立场。',
-      '诚实清单（当前真实边界）：稀疏/RRF/重排/意图路由/元数据过滤/上下文构建器/纠错/缓存均为占位或退化；安全门是关键词正则；Qdrant 单 collection、无 KB 隔离；Postgres/MinIO/Celery 适配器未实现。',
+      '诚实清单（当前真实边界）：BM25/RRF/意图路由/元数据过滤/上下文预算/父块扩展/有限纠错/缓存/限流已有本地真实实现；重排依赖可达 /rerank 端点，图谱仍是 stub；安全门是关键词正则；Qdrant 单 collection、无 KB 隔离；Postgres/MinIO/Celery 适配器未实现。',
     ],
     whyNext: '下一步的优先级排序（如果继续投入）：① 真实稀疏检索 + RRF（先建评测对照）；② KB 隔离（多租户的地基）；③ 真实重排（精度收益最大的单点）；④ 元数据过滤（政策类场景的合规刚需）。排序依据是「评测能证明收益 + 解锁的场景数」。',
     interviewQs: [
-      { q: '你给自己的项目打 3/10，不怕被面试官觉得项目不行吗？', a: '恰恰相反，这个分数是拆开打的：运维横切面按生产 checklist 逐项达标，算法面诚实地停在 Naive+。能精确说出自己在哪条轴的哪个位置、下一步投什么、为什么，比一句「我做了企业级 RAG」可信得多。评估一个 RAG 产品的成熟度本来就是 PM 的核心技能。' },
-      { q: '怎么证明徽标说的是真话？', a: '现场证明：跑一次 v0_1_dense 和一次 v0_4_rerank，对比两次的证据列表——顺序完全一致，因为 reranker 是直通的；Trace 里那一行明确写着 stub_passthrough。徽标、Trace、行为三方一致，这就是「可证明」。' },
+      { q: '你给自己的项目打 3/10，不怕被面试官觉得项目不行吗？', a: '恰恰相反，这个分数是拆开打的：运维横切面已有可运行基线，算法面也有本地 BM25/RRF/上下文/纠错，但生产级持久化、多租户、图谱与视觉检索仍未完成。能精确说出自己在哪条轴的哪个位置、下一步投什么、为什么，比一句「我做了企业级 RAG」可信得多。' },
+      { q: '怎么证明徽标说的是真话？', a: '现场证明：先跑 v0_2_hybrid，看 sparse 的 bm25_local 与 RRF 的融合详情；再跑 v0_4_rerank。没有 /rerank 端点时 Trace 明确写 fallback_passthrough，配置端点后再看 rerank_live 与排名变化。徽标、Trace、行为三方一致，这就是「可证明」。' },
     ],
     legacy: ['你现在看到的一切：画布徽标、检查器的生效/不生效、Trace 的 execution 列、顶栏三态模式切换。', '实验手册里的「占位证明实验」可以一键复现上面那个对比。'],
     actions: [{ label: '加载 v0_4_rerank 做占位证明', recipeId: 'v0_4_rerank', railTab: 'recipe' }, { label: '看实验手册', bottomTab: 'trace' }],
