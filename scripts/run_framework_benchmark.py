@@ -50,6 +50,7 @@ def main() -> int:
             result = response.json()
             trace = result.get("trace", [])
             evidence = result.get("evidence", [])
+            otel_trace_id = next((event.get("otel_trace_id") for event in trace if event.get("otel_trace_id")), None)
             rows.append({
                 "case_id": case["case_id"],
                 "question": case["question"],
@@ -61,6 +62,7 @@ def main() -> int:
                 "trace_nodes": [event.get("node_id") for event in trace],
                 "trace_statuses": [event.get("status") for event in trace],
                 "run_id": result.get("run_id"),
+                "otel_trace_id": otel_trace_id,
             })
 
     answerable = [row for row in rows if row["must_answer"]]

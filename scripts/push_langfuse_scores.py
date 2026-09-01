@@ -26,7 +26,10 @@ def _score_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
     rows = report.get("rows") or []
     scores: list[dict[str, Any]] = []
     for row in rows:
-        trace_id = row.get("run_id") or row.get("trace_id")
+        # OpenRAG's business run_id is not Langfuse's OTel trace_id. New
+        # benchmark rows persist the latter explicitly; the older fallbacks
+        # keep dry-run compatibility with historical reports.
+        trace_id = row.get("otel_trace_id") or row.get("trace_id") or row.get("run_id")
         if not trace_id:
             continue
         if "citation_present" in row:

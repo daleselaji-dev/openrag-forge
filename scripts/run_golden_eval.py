@@ -42,7 +42,9 @@ def main() -> int:
             response.raise_for_status()
             latencies.append(latency)
             row = evaluate_case(case, response.json(), bound)
-            row.update({"question": case.question, "intent": case.intent, "risk_level": case.risk_level, "latency_ms": round(latency, 2), "bound_chunk_ids": sorted(bound), "tags": case.tags})
+            result_payload = response.json()
+            otel_trace_id = next((event.get("otel_trace_id") for event in result_payload.get("trace", []) if event.get("otel_trace_id")), None)
+            row.update({"question": case.question, "intent": case.intent, "risk_level": case.risk_level, "latency_ms": round(latency, 2), "bound_chunk_ids": sorted(bound), "tags": case.tags, "otel_trace_id": otel_trace_id})
             rows.append(row)
     def mean(key: str, selector=lambda row: True) -> float:
         selected = [row for row in rows if selector(row) and row[key] is not None]
