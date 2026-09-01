@@ -379,7 +379,7 @@ export const STAGE_LESSONS: Record<string, StageLesson> = {
       ifMissing: '只能靠嵌入相似分排序，Top-5 里混进「主题相关但答非所问」的内容，直接传导为答案质量问题。',
       ifOverdone: 'candidate_k 开太大（500 条）：时延与费用线性上涨，而第 100 名之后基本不含答案；用生成式大模型做 listwise 重排：贵一个量级，先证明 cross-encoder 不够用。',
     },
-    liveStatus: 'fallback/live：有可达的 /rerank 端点时调用 Cross-Encoder；本地服务未就绪时显示 fallback_passthrough，绝不把降级冒充成已重排。',
+    liveStatus: 'fallback/live：有可达的 /rerank 端点时调用 Cross-Encoder；本地服务未就绪时显示 fallback_passthrough，明确退化为直通，绝不把降级冒充成已重排。',
     interviewQs: [
       { q: '为什么不先做重排？它不是收益最大吗？', a: '收益最大是「在有评测的前提下测出来的」。我的排序是：先评测（尺子）→ 再混合检索（扩召回池）→ 再重排（精排池内排序）。在只有单路 dense 且 top_k=5 的现状下，重排的输入池太小，理论收益被截断。做事顺序也是产品设计。' },
       { q: '重排的成本怎么向管理层解释？', a: '换算成业务语言：每查询 +200ms 和 +0.x 分钱，换 Top-3 命中率 +15%（示例量级，以自家评测为准）——如果每次坏答案的人工兜底成本是 X 元，很容易算出盈亏平衡的查询量。重排是少数能这样干净算账的模块。' },
