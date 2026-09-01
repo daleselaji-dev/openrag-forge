@@ -216,6 +216,16 @@ def _health(store: Store) -> dict[str, Any]:
         lm_studio["models"] = [item.get("id") for item in response.json().get("data", [])]
     except Exception as exc:
         lm_studio["error"] = type(exc).__name__
+    langfuse: dict[str, Any] = {"enabled": settings.langfuse_enabled, "base_url": settings.langfuse_base_url, "status": "disabled"}
+    if settings.langfuse_enabled:
+        langfuse["status"] = "unreachable"
+        try:
+            response = client.get(f"{settings.langfuse_base_url.rstrip('/')}/api/public/health", timeout=settings.probe_timeout_seconds)
+            langfuse["status"] = "ready" if response.status_code == 200 else "error"
+            if response.status_code == 200:
+                langfuse["version"] = response.json().get("version")
+        except Exception as exc:
+            langfuse["error"] = type(exc).__name__
     return {
         "status": "ready",
         "profile": settings.profile,
@@ -223,6 +233,7 @@ def _health(store: Store) -> dict[str, Any]:
         "truth_source": "sqlite+local_blob" if settings.profile == "lite" else "production_adapter",
         "qdrant": qdrant,
         "lm_studio": lm_studio,
+        "langfuse": langfuse,
         "models": {"chat": settings.chat_model, "embedding": settings.embedding_model, "reranker": settings.reranker_model or None},
         "documents": documents,
         "capabilities": {"parsers": ["native_text", "html_structure", "pdf_page_text", "pdf_layout", "office_structure", "tabular", "json_structure"], "graph": settings.profile in {"graph", "production"}, "agent": False},

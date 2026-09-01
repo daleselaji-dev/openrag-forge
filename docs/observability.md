@@ -8,6 +8,31 @@
 | 系统整体处于什么状态？ | 指标 Metrics | `observability/metrics.py` | Prometheus `:19090` / Grafana `:13000` |
 | 那个时刻具体报了什么错？ | 日志 Logs | `observability/logging.py` | `docker compose logs api` / 日志平台 |
 
+## Langfuse 作为独立观测节点
+
+除了 Jaeger/Tempo，OpenRAG Forge 可以把同一批 OpenTelemetry span 发送到自托管 Langfuse。
+Langfuse v4 推荐使用 OTLP ingestion（`/api/public/otel/v1/traces`），而不是旧版 legacy ingestion。
+因此 Langfuse 是独立的观测/评测服务：它不会改变 Recipe 的检索或生成结果，只负责保存 LLM 调用、
+运行上下文、延迟、模型版本和后续 Score/Eval。配置 `OPENRAG_LANGFUSE_ENABLED=true`、
+`OPENRAG_LANGFUSE_BASE_URL` 以及项目 public/secret key 后重启 API，顶栏会显示 Langfuse 健康状态。
+
+Langfuse 的 Score 可以来自确定性代码、人工标注或 LLM-as-a-Judge；本项目的 Recall@k、MRR、nDCG、
+Citation validity、拒答正确性和 p95 仍以本地 Golden Set 为主门禁，再把逐条结果和 Trace ID
+同步到 Langfuse 做切片、回放和长期趋势分析。
+
+将本地报告同步到 Langfuse：
+
+```powershell
+$env:OPENRAG_LANGFUSE_BASE_URL = "http://localhost:3000"
+$env:OPENRAG_LANGFUSE_PUBLIC_KEY = "lf_pk_..."
+$env:OPENRAG_LANGFUSE_SECRET_KEY = "lf_sk_..."
+python scripts/push_langfuse_scores.py --report reports/framework_smoke_latest.json
+```
+
+适配器只发送可复现的确定性分数（`citation_presence`、`evidence_presence`、
+`refusal_correctness`、`latency_ms`），不会把“模型觉得正确”冒充成事实。发布门禁仍读取
+本地报告；Langfuse 负责长期趋势和逐条 Trace 复盘。
+
 ## 一键启动本地可观测性栈
 
 ```bash

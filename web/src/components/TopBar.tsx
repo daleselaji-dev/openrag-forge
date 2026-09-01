@@ -43,6 +43,11 @@ export default function TopBar({ health, mode, onSetMode, onRefresh }: Props) {
         <span className={`status-chip-item ${health?.lm_studio?.status === 'ready' ? 'good' : 'warn'}`} title="OpenAI 兼容模型端点状态">
           <small>MODEL</small><b>{health?.lm_studio?.status || '…'}</b>
         </span>
+        {health?.langfuse?.enabled && (
+          <span className={`status-chip-item ${health.langfuse.status === 'ready' ? 'good' : 'warn'}`} title={`Langfuse 观测后端：${health.langfuse.base_url || ''}`}>
+            <small>LANGFUSE</small><b>{health.langfuse.status || '…'}</b>
+          </span>
+        )}
         {warnings.length > 0 && (
           <span className="status-chip-item bad" title={warnings.join('\n')}>
             <small>READINESS</small><b>{warnings.length} 项告警</b>

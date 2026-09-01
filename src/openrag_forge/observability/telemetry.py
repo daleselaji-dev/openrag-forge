@@ -23,6 +23,7 @@ ParentBased 采样器保证一条链路上的所有 span 采样决策一致（�
 
 from __future__ import annotations
 
+import base64
 import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -40,7 +41,7 @@ _enabled = False
 def setup_tracing(settings: Settings) -> bool:
     """初始化 TracerProvider 与 OTLP 导出。在 lifespan 启动阶段调用一次。"""
     global _provider, _enabled
-    if not settings.otel_enabled:
+    if not settings.otel_enabled and not settings.langfuse_enabled:
         return False
     try:
         from opentelemetry import trace
@@ -61,18 +62,28 @@ def setup_tracing(settings: Settings) -> bool:
             "deployment.environment": settings.environment,
         }
     )
-    provider = TracerProvider(
-        resource=resource,
-        sampler=ParentBased(TraceIdRatioBased(settings.otel_sample_ratio)),
+    sample_ratio = min(
+        settings.otel_sample_ratio if settings.otel_enabled else 1.0,
+        settings.langfuse_sample_ratio if settings.langfuse_enabled else 1.0,
     )
-    endpoint = settings.otel_exporter_otlp_endpoint.rstrip("/")
-    # BatchSpanProcessor 在后台批量异步导出，不阻塞请求路径；
-    # 与之相对的 SimpleSpanProcessor 每个 span 同步导出，只适合调试。
-    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=f"{endpoint}/v1/traces")))
+    provider = TracerProvider(resource=resource, sampler=ParentBased(TraceIdRatioBased(sample_ratio)))
+    if settings.otel_enabled:
+        endpoint = settings.otel_exporter_otlp_endpoint.rstrip("/")
+        # BatchSpanProcessor 在后台批量异步导出，不阻塞请求路径；
+        # 与之相对的 SimpleSpanProcessor 每个 span 同步导出，只适合调试。
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=f"{endpoint}/v1/traces")))
+    if settings.langfuse_enabled:
+        if settings.langfuse_public_key and settings.langfuse_secret_key:
+            auth = base64.b64encode(f"{settings.langfuse_public_key}:{settings.langfuse_secret_key}".encode()).decode("ascii")
+            endpoint = f"{settings.langfuse_base_url.rstrip('/')}/api/public/otel/v1/traces"
+            provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint, headers={"Authorization": f"Basic {auth}", "x-langfuse-ingestion-version": "4"})))
+            logger.info("Langfuse OTLP tracing 已启用", extra={"langfuse_endpoint": endpoint})
+        else:
+            logger.warning("OPENRAG_LANGFUSE_ENABLED=true 但缺少 Langfuse public/secret key；exporter 未启用")
     trace.set_tracer_provider(provider)
     _provider = provider
     _enabled = True
-    logger.info("OpenTelemetry tracing 已启用", extra={"otlp_endpoint": endpoint, "sample_ratio": settings.otel_sample_ratio})
+    logger.info("OpenTelemetry tracing 已启用", extra={"otel_enabled": settings.otel_enabled, "langfuse_enabled": settings.langfuse_enabled, "sample_ratio": sample_ratio})
     return True
 
 

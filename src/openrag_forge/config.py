@@ -86,6 +86,14 @@ class Settings(BaseSettings):
     otel_sample_ratio: float = 1.0
     metrics_enabled: bool = True
 
+    # Optional Langfuse OTLP exporter. Langfuse is an observability/evaluation
+    # backend, not a node that changes the RAG answer path.
+    langfuse_enabled: bool = False
+    langfuse_base_url: str = "http://localhost:3000"
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_sample_ratio: float = 1.0
+
     # ------------------------------------------------------------------
     # 检索与业务 Trace
     # ------------------------------------------------------------------
@@ -124,6 +132,8 @@ class Settings(BaseSettings):
             warnings.append("OPENRAG_OTEL_ENABLED=false，无法在 Jaeger/Tempo 中查看分布式追踪")
         if self.profile == "lite":
             warnings.append("profile=lite 使用 SQLite 真相源，仅适合单副本；多副本请切换 production profile")
+        if self.langfuse_enabled and not (self.langfuse_public_key and self.langfuse_secret_key):
+            warnings.append("Langfuse 已开启但 public/secret key 不完整，无法写入 OTLP Trace")
         return warnings
 
 

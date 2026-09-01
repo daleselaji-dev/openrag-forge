@@ -67,6 +67,21 @@
 | `OPENRAG_OTEL_SAMPLE_RATIO` | `1.0` | 高流量降到 0.05~0.2 控制成本 |
 | `OPENRAG_METRICS_ENABLED` | `true` | 保持开启；网络层限制 /metrics 只对 Prometheus 可达 |
 
+### Langfuse（可选）
+
+Langfuse 是独立的 LLM 观测与评测后端，不是会改变 RAG 结果的画布节点。开启后，
+OpenTelemetry span 会通过 OTLP `/api/public/otel/v1/traces` 发往自托管 Langfuse，
+同时可以继续发往 Jaeger/Tempo。public/secret key 只从环境变量读取，不会写入业务 Trace、
+Evidence Capsule 或日志。
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `OPENRAG_LANGFUSE_ENABLED` | `false` | 是否启用 Langfuse OTLP exporter |
+| `OPENRAG_LANGFUSE_BASE_URL` | `http://localhost:3000` | 自托管 Langfuse 地址 |
+| `OPENRAG_LANGFUSE_PUBLIC_KEY` | 空 | Langfuse project public key，经 Secret 注入 |
+| `OPENRAG_LANGFUSE_SECRET_KEY` | 空 | Langfuse project secret key，经 Secret 注入 |
+| `OPENRAG_LANGFUSE_SAMPLE_RATIO` | `1.0` | Langfuse trace 采样率；高流量可降到 0.05~0.2 |
+
 ## 启动时的配置校验
 
 `OPENRAG_ENVIRONMENT=production` 时，应用启动会执行生产就绪检查（`Settings.production_warnings()`），结果同时输出到：

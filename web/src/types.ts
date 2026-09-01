@@ -147,6 +147,7 @@ export type Health = {
   documents?: number
   qdrant?: { status?: string }
   lm_studio?: { status?: string }
+  langfuse?: { enabled?: boolean; base_url?: string; status?: string; version?: string }
   models?: { chat?: string; embedding?: string; reranker?: string | null }
   production_readiness?: { warnings: string[] }
 }
