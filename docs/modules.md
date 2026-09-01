@@ -92,7 +92,7 @@
 **契约**
 - Profile：`{model_id, display_name, kind, base_url, model_name, api_key?, parameters}`。
 - **API key 只保存在服务端 SQLite**：`GET /models`、注册响应一律脱敏成 `has_api_key: bool`；key 永不进入 Trace / Capsule（执行器记录 config 前统一 `_redact`）。
-- `POST /models/{id}/probe`：embedding 走真实 `/embeddings` 调用，chat/reranker 走 `/models`，带 Authorization 头。
+- `POST /models/{id}/probe`：embedding 走真实 `/embeddings` 调用，chat 走 `/models`，reranker 走真实 `/rerank` 探测，均带 Authorization 头。
 - 节点级绑定：任何带 `model_ref` 旋钮的节点（dense_retrieve / embed_index / llm_generate / reranker）可绑定注册的 profile；上传时可指定 `embedding_model_id` 实现"不同知识库不同向量模型"。
 - 全局默认走 `.env`（`OPENRAG_CHAT_API_KEY` 等）。
 

@@ -59,7 +59,7 @@ export const LANDSCAPE: LandscapeCategory[] = [
         strengths: ['混合检索 + 语义重排开箱即用', '与 Azure 生态（AAD、Purview）无缝', '企业合规认证齐全'],
         weaknesses: ['重排黑盒，坏 case 无法归因', '切分/嵌入策略定制受限', '成本模型复杂，语义排序另计费'],
         whenToPick: '已在 Azure、要 3 个月内上线、接受托管黑盒、检索不是核心差异化能力时。',
-        vsForge: 'Forge 的每一环都有 Trace 可归因，Azure 的语义重排给不出「为什么这条排第一」；反过来 Azure 的混合检索是真实现，Forge 的还是占位。用 Forge 设计验收标准，再去验收 Azure。',
+        vsForge: 'Forge 的每一环都有 Trace 可归因，Azure 的语义重排给不出「为什么这条排第一」；Forge 用本地 BM25/RRF 做可复现基线，生产规模再替换为持久化 hybrid。用 Forge 设计验收标准，再去验收 Azure。',
       },
       {
         id: 'aws-kendra',
@@ -162,7 +162,7 @@ export const LANDSCAPE: LandscapeCategory[] = [
         strengths: ['Pipeline 显式、可序列化、类型清楚', 'API 稳定性口碑好', '检索工程传统深'],
         weaknesses: ['生态与社区规模小于 LangChain/LlamaIndex', '国内案例较少', '高级 RAG 算法组件相对少'],
         whenToPick: '重视工程秩序与长期维护性、检索场景为主的团队。',
-        vsForge: '理念最近的亲戚：都是 typed DAG + 可序列化 pipeline。差异是 Haystack 组件全部真实现且生产可用，Forge 用编译哈希 + Evidence Capsule + 诚实徽标把「可证明」推得更极端，但算法组件多数未实现。',
+        vsForge: '理念最近的亲戚：都是 typed DAG + 可序列化 pipeline。差异是 Haystack 组件更完整，Forge 用编译哈希 + Evidence Capsule + 诚实徽标把「可证明」推得更极端；本地算法基线已覆盖 BM25/RRF/上下文/纠错，图谱仍未接入。',
       },
       {
         id: 'dify',

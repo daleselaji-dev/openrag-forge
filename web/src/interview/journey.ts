@@ -104,7 +104,7 @@ export const JOURNEY: JourneyGeneration[] = [
     ],
     tradeoffs: [
       '牺牲了「界面自由」：画布只能摆注册过的节点类型、连类型兼容的线。比通用白板难受，但换来「画出来的一定能编译」。',
-      '埋下了一个日后必须还的债：目录里为了展示演进路线放了 V0.2~V0.8 的进阶 Recipe（混合、重排、纠错、图谱），但执行器没有跟上——目录超前于执行器。这个债在「当前诚实态」一代才用徽标体系还清。',
+      '埋下了一个日后必须还的债：早期目录里为了展示演进路线放了 V0.2~V0.8 的进阶 Recipe，执行器最初没有跟上。后来先补了 BM25/RRF/上下文/纠错等本地基线，再用徽标体系标出仍需外部后端的部分。',
     ],
     whyNext: '可装配让试验变快，但要把它当真东西部署，缺的是完全不同的一类能力：探针、鉴权、限流、结构化日志、真实耗时。下一代不加任何算法，专门补运维横切面。',
     interviewQs: [
@@ -132,7 +132,7 @@ export const JOURNEY: JourneyGeneration[] = [
       '牺牲了功能进度：这一整代没有任何用户可感知的新能力，纯「看不见的工程」。作为 PM 我认为排期上这是对的：可观测性欠账越晚还越贵。',
       '限流同时有两层：画布上的 rate_limit 节点提供单进程 Recipe 级滑动窗口，服务级中间件由 OPENRAG_RATE_LIMIT_PER_MINUTE 兜底；多副本仍要在网关/Redis 共享状态。我在节点上标注了这一点，防止把单机能力误说成集群能力。',
     ],
-    whyNext: '横切面达标后，最后的问题反而是「诚实」本身：目录里的进阶节点（稀疏/RRF/重排）会让画布看起来比实际能力强。下一代不写新功能，写「承认」。',
+    whyNext: '横切面有基线后，下一步要把可运行的本地算法升级为可运营后端：持久化 sparse、可用 rerank、评测中心与多租户边界。',
     interviewQs: [
       { q: '业务 Trace 和 OTel span 为什么要两套，不冗余吗？', a: '受众不同、生命周期不同。业务 Trace 回答「这个答案的证据链是什么」，要永久保存供审计；OTel 回答「这 3 秒慢在哪」，采样保留、过期即弃。用同一个 trace_id 关联，但绝不合并——合并的结果是审计数据被采样丢掉，或者性能系统被审计数据撑爆。' },
       { q: '这一代之后你敢接生产流量吗？', a: '运维意义上敢：挂了知道、慢了能查、有鉴权限流。但业务意义上不敢：检索算法还是 Naive 级、安全门只是关键词正则、没有 KB 隔离。我的结论是 3/10 的生产就绪度——横切面拉高不了算法面的分。' },
@@ -149,8 +149,8 @@ export const JOURNEY: JourneyGeneration[] = [
       '于是这一代的核心交付是一套诚实标注体系，而不是新算法。',
     ],
     decisions: [
-      '节点目录增加 implemented 三态：live（真实执行）/ fallback（退化为共享路径）/ stub（占位直通）。画布徽标、检查器徽章、Trace 的 execution 列三处同源展示。',
-      '配置表单字段级标注 effective：改 reranker 的 candidate_k 会保存但明确提示「不生效」——表单不骗人。',
+      '节点目录增加 implemented 三态：live（真实执行）/ fallback（依赖缺失时可解释降级）/ stub（尚未接入）。画布徽标、检查器徽章、Trace 的 execution 列三处同源展示。',
+      '配置表单字段级标注 effective：BM25/RRF、上下文预算与限流等绿色字段会改变运行；reranker 字段在端点不可达时仍会保存，但 Trace 会明确显示 fallback。',
       '全高 Control Room 布局：左轨（装配/数据/模型/场景）+ 画布 + 检查器 + 底部 Trace；辅助教学做成可开关的模式而不是常驻噪声。',
       '现在这个「面试讲解」模式是同一思路的延伸：讲解跟着节点走、跟着 Trace 走，而不是一份脱离工作台的文档。',
     ],
@@ -163,7 +163,7 @@ export const JOURNEY: JourneyGeneration[] = [
       { q: '你给自己的项目打 3/10，不怕被面试官觉得项目不行吗？', a: '恰恰相反，这个分数是拆开打的：运维横切面已有可运行基线，算法面也有本地 BM25/RRF/上下文/纠错，但生产级持久化、多租户、图谱与视觉检索仍未完成。能精确说出自己在哪条轴的哪个位置、下一步投什么、为什么，比一句「我做了企业级 RAG」可信得多。' },
       { q: '怎么证明徽标说的是真话？', a: '现场证明：先跑 v0_2_hybrid，看 sparse 的 bm25_local 与 RRF 的融合详情；再跑 v0_4_rerank。没有 /rerank 端点时 Trace 明确写 fallback_passthrough，配置端点后再看 rerank_live 与排名变化。徽标、Trace、行为三方一致，这就是「可证明」。' },
     ],
-    legacy: ['你现在看到的一切：画布徽标、检查器的生效/不生效、Trace 的 execution 列、顶栏三态模式切换。', '实验手册里的「占位证明实验」可以一键复现上面那个对比。'],
-    actions: [{ label: '加载 v0_4_rerank 做占位证明', recipeId: 'v0_4_rerank', railTab: 'recipe' }, { label: '看实验手册', bottomTab: 'trace' }],
+    legacy: ['你现在看到的一切：画布徽标、检查器的生效/不生效、Trace 的 execution 列、顶栏三态模式切换。', '实验手册里的「依赖证明实验」可以一键复现 reranker 的 live/fallback 对比。'],
+    actions: [{ label: '加载 v0_4_rerank 看依赖状态', recipeId: 'v0_4_rerank', railTab: 'recipe' }, { label: '看实验手册', bottomTab: 'trace' }],
   },
 ]

@@ -135,7 +135,7 @@ OPENRAG_OTEL_ENABLED=true docker compose --profile observability up -d
 
 ### 面试讲解模式（RAG 设计课）
 
-顶栏切到「面试讲解」后，左侧出现可收起的讲解面板（内容在 `web/src/interview/`），五章可导航：**设计历程**（V0 整文入上下文 → V0.1 Naive RAG → 可观察 → 可装配 → 生产横切 → 当前诚实态，每代含业务动机 / 取舍 / 面试追问）、**方案对比**（Naive/Advanced/Modular 范式 + 托管套件 / 开源编排 / 检索中台 / GraphRAG 逐维对比与 PM 结论）、**环节地图**（点击环节即选中画布对应节点，检查器同步显示该环节的规格级讲解 + 可改配置；不在当前 Recipe 的环节可一键加入画布试装）、**核心件深讲**（向量库专章含 8-12 分钟口述提纲，另有 Embedding / Chunk / Rerank / 生成 / Eval 五章）、**实验手册**（改一项配置 → 再跑 → 看 Trace 哪一行变了，含「占位证明」实验）。装配过程全程可定制，讲解跟着节点与 Trace 走；关闭讲解后界面回到干净控制室。
+顶栏切到「面试讲解」后，左侧出现可收起的讲解面板（内容在 `web/src/interview/`），五章可导航：**设计历程**（V0 整文入上下文 → V0.1 Naive RAG → 可观察 → 可装配 → 生产横切 → 当前诚实态，每代含业务动机 / 取舍 / 面试追问）、**方案对比**（Naive/Advanced/Modular 范式 + 托管套件 / 开源编排 / 检索中台 / GraphRAG 逐维对比与 PM 结论）、**环节地图**（点击环节即选中画布对应节点，检查器同步显示该环节的规格级讲解 + 可改配置；不在当前 Recipe 的环节可一键加入画布试装）、**核心件深讲**（向量库专章含 8-12 分钟口述提纲，另有 Embedding / Chunk / Rerank / 生成 / Eval 五章）、**实验手册**（改一项配置 → 再跑 → 看 Trace 哪一行变了，含「依赖 live/fallback」实验）。装配过程全程可定制，讲解跟着节点与 Trace 走；关闭讲解后界面回到干净控制室。
 
 开发：`cd web && npm run dev`（Vite :5173，`/api` 代理到 :18000）；`npm run build` 后 FastAPI 直接伺服 `web/dist`。
 
