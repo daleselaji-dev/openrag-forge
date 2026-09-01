@@ -131,7 +131,7 @@ OPENRAG_OTEL_ENABLED=true docker compose --profile observability up -d
 `web/` 是全高 Control Room 工作台：左轨切换 装配 / 数据 / 模型 / 场景，中间是 React Flow 画布，右侧节点检查器提供结构化配置表单（字段带 生效 / 不生效 标注，JSON 仅作高级模式），底部 Trace 面板包含 运行 Trace（真实 duration_ms + execution 标注，点击行高亮画布节点）、Ingest Trace 与 回答与证据（安全决策 + Evidence Capsule 下载）。
 
 - 顶栏三态模式切换（localStorage 持久化）：`工作台`（干净控制室）/ `辅助教学`（7 步操作课：怎么用这个工作台）/ `面试讲解`（RAG 设计课，见下）。
-- 诚实标注：目录中尚未实现的节点（稀疏检索 / RRF / 重排等）在画布、检查器与 Trace 里都会标注「占位 / 退化」，Trace 的 `execution` 字段记录每一步真实发生了什么（live / fallback / stub_passthrough）。
+- 诚实标注：画布、检查器与 Trace 共享同一份 live / fallback / stub 能力目录。BM25、RRF、上下文预算、父块扩展、有限纠错、缓存和限流已有本地真实基线；重排在绑定可达 `/rerank` 端点时 live，否则标注 fallback；图谱仍为 stub。Trace 的 `execution` 字段记录每一步真实发生了什么。
 
 ### 面试讲解模式（RAG 设计课）
 
@@ -151,7 +151,7 @@ OPENRAG_OTEL_ENABLED=true docker compose --profile observability up -d
 
 The compiler catalog, Store port, profile extras and Pack isolation are deliberate extension slots. Highlights (full list with priorities in [`docs/roadmap.md`](docs/roadmap.md)):
 
-- **P0** — wire the already-registered `sparse_retrieve` / `rrf_fusion` / `reranker` / `bounded_corrective` nodes to real backends, then run the V0.1 vs V0.2 vs V0.4 comparison on a frozen Golden Set; freeze a 50+ case reviewed Golden Set and commit the report snapshots.
+- **P0** — replace the local BM25 baseline with a persistent sparse backend (Qdrant named sparse or OpenSearch), run a real local Cross-Encoder reranker, then compare V0.1 vs V0.2 vs V0.4 on a frozen Golden Set; freeze a 50+ case reviewed Golden Set and commit report snapshots.
 - **P1** — PostgreSQL/MinIO implementations of the Store port, Celery-based async ingest, OpenTelemetry export of Trace events; an eval-driven Recipe A/B and regression-gate loop on top of recipe hashes.
 - **P2** — graph-augmented retrieval (Neo4j extras declared), layout-aware PDF/multimodal retrieval, multi-step controlled Agent on the same `forbidden_actions` invariants, and more domain Packs following the CFPB pattern.
 

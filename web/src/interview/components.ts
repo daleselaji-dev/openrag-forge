@@ -100,7 +100,7 @@ export const COMPONENT_CHAPTERS: DeepDiveChapter[] = [
         ],
       },
       {
-        heading: '本仓库为什么还没做（排期即产品决策）',
+        heading: '本仓库的实现边界（排期即产品决策）',
         paragraphs: [
           '现状：reranker 节点会读取 model_ref、candidate_k、final_k。注册可达的 /rerank 端点时 Trace 标记 rerank_live；端点不可用时标记 fallback_passthrough，证据顺序保持不变——这是依赖降级，不是伪装成已完成。',
           '为什么仍然要先扩池和评测：重排的收益要在「召回池足够大且有评测尺子」的前提下才能测量。推荐闭环是：dense/sparse top_k 提到 30~50 → 接一个本地 BGE Cross-Encoder 端点 → 输出 final_k=6 → 用黄金集对比 Hit@3/MRR 与 p95 → 收益达标才默认开启。',

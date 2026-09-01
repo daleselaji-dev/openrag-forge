@@ -130,7 +130,7 @@ export const JOURNEY: JourneyGeneration[] = [
     ],
     tradeoffs: [
       '牺牲了功能进度：这一整代没有任何用户可感知的新能力，纯「看不见的工程」。作为 PM 我认为排期上这是对的：可观测性欠账越晚还越贵。',
-      '限流做在服务级中间件而不是节点级：画布上的 rate_limit 节点至今是占位——真实生效的是 OPENRAG_RATE_LIMIT_PER_MINUTE。我在节点上标注了这一点，防止画布骗人。',
+      '限流同时有两层：画布上的 rate_limit 节点提供单进程 Recipe 级滑动窗口，服务级中间件由 OPENRAG_RATE_LIMIT_PER_MINUTE 兜底；多副本仍要在网关/Redis 共享状态。我在节点上标注了这一点，防止把单机能力误说成集群能力。',
     ],
     whyNext: '横切面达标后，最后的问题反而是「诚实」本身：目录里的进阶节点（稀疏/RRF/重排）会让画布看起来比实际能力强。下一代不写新功能，写「承认」。',
     interviewQs: [
